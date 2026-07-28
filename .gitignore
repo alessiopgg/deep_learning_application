@@ -1,0 +1,22 @@
+# Output generati dagli esperimenti
+**/outputs/
+**/wandb/
+
+# Dataset locali
+**/data/
+
+# Modelli e checkpoint
+*.pt
+*.pth
+*.ckpt
+
+# Feature e array generati
+*.npz
+*.npy
+
+# Cache Python
+**/__pycache__/
+*.pyc
+
+# PyCharm
+.idea/
