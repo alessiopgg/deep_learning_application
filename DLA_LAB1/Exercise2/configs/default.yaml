@@ -1,0 +1,45 @@
+paths:
+  data_dir: ../data
+  output_dir: outputs
+
+data:
+  dataset_name: GTSRB
+  validation_size: 0.20
+  batch_size: 32
+  num_workers: 0
+  pin_memory: true
+
+model:
+  name: resnet18
+  classifier_type: linear
+  fine_tuning_strategy: last_block
+  num_classes: 43
+  mlp_hidden_features: 256
+  mlp_dropout: 0.30
+
+training:
+  epochs: 5
+  loss_function: cross_entropy
+  optimizer: adamw
+  backbone_learning_rate: 0.0001
+  classifier_learning_rate: 0.001
+  weight_decay: 0.0001
+
+checkpoint:
+  monitor: validation_loss
+  mode: min
+
+logging:
+  batch_interval: 50
+
+tracking:
+  use_wandb: false
+  project: dla-lab1
+  group: exercise-2
+
+experiment:
+  seed: 42
+  device: auto
+  deterministic: false
+  run_name: null
+  smoke_test_batches: 0
