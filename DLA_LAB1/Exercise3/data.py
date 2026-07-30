@@ -18,6 +18,7 @@ except ModuleNotFoundError as exc:
 
 DATASET_REPOSITORY = "keremberke/german-traffic-sign-detection"
 DATASET_CONFIGURATION = "full"
+DATASET_REVISION = "a549a284a1fefdc761ad459ee85f50c5ad8138ef"
 IMAGE_FIELD = "image"
 ANNOTATIONS_FIELD = "objects"
 SOURCE_BBOX_FORMAT = "COCO xywh: [x_min, y_min, width, height]"
@@ -45,6 +46,8 @@ def load_detection_dataset(
     dataset = load_dataset(
         DATASET_REPOSITORY,
         name=DATASET_CONFIGURATION,
+        revision=DATASET_REVISION,
+        trust_remote_code=True,
         cache_dir=str(resolved_cache_dir),
     )
 
