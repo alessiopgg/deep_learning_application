@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from data import (
+from Exercise3.data_pipeline.loading import (
     DEFAULT_CACHE_DIR,
     DEFAULT_REPORT_PATH,
     inspect_dataset,
