@@ -231,7 +231,7 @@ def train_one_epoch(
     scaler: Any,
     device: torch.device,
     amp_enabled: bool,
-    freeze_backbone: bool,
+    trainable_backbone: str,
     epoch: int,
     global_step: int,
     logging_interval: int,
@@ -239,7 +239,7 @@ def train_one_epoch(
     max_batches: int | None,
     batch_logger: BatchLogger | None = None,
 ) -> tuple[EpochLossMetrics, int]:
-    configure_model_for_training(model, freeze_backbone=freeze_backbone)
+    configure_model_for_training(model, trainable_backbone=trainable_backbone)
     _reset_peak_memory(device)
 
     weighted_losses = {name: 0.0 for name in EXPECTED_LOSS_KEYS}
@@ -366,7 +366,7 @@ def evaluate_validation_loss(
     loader: DataLoader,
     device: torch.device,
     amp_enabled: bool,
-    freeze_backbone: bool,
+    trainable_backbone: str,
     validation_seed: int,
     max_batches: int | None,
 ) -> EpochLossMetrics:
@@ -392,7 +392,7 @@ def evaluate_validation_loss(
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(validation_seed)
 
-        configure_model_for_training(model, freeze_backbone=freeze_backbone)
+        configure_model_for_training(model, trainable_backbone=trainable_backbone)
         for batch_index, (images_cpu, targets_cpu) in enumerate(loader):
             if max_batches is not None and batch_index >= max_batches:
                 break

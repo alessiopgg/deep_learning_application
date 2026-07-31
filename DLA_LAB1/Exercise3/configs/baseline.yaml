@@ -12,6 +12,10 @@ data:
 model:
   architecture: fasterrcnn_resnet50_fpn
   weights: coco
+  backbone_source: coco
+  gtsrb_checkpoint: null
+  required_gtsrb_strategy: full
+  trainable_backbone: frozen
   freeze_backbone: true
   num_classes: 44
   progress: true
@@ -19,6 +23,7 @@ model:
 optimizer:
   name: sgd
   learning_rate: 0.005
+  backbone_learning_rate: 0.0001
   momentum: 0.9
   weight_decay: 0.0005
 

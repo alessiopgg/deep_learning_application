@@ -296,6 +296,22 @@ def _validate_runtime_dependencies(
         print(f"  wandb: {versions.get('wandb')}")
 
 
+def _scientific_study_signature(config: StudyConfig) -> dict[str, Any]:
+    """Fields that must not change when resuming an existing study."""
+    payload = {
+        "name": config.name,
+        "training_config": config.training_config,
+        "evaluation_config": config.evaluation_config,
+        "required_gtsrb_strategy": config.required_gtsrb_strategy,
+        "gtsrb_checkpoint": config.gtsrb_checkpoint,
+        "common_training_overrides": list(config.common_training_overrides),
+        "common_evaluation_overrides": list(config.common_evaluation_overrides),
+        "experiments": [asdict(item) for item in config.experiments],
+    }
+    # Normalize tuples to the JSON representation stored in study_manifest.json.
+    return json.loads(json.dumps(payload))
+
+
 def _prepare_study_directory(
     config: StudyConfig,
     args: argparse.Namespace,
@@ -306,6 +322,25 @@ def _prepare_study_directory(
         if not manifest_path.is_file():
             raise FileNotFoundError(f"Study manifest not found: {manifest_path}")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        stored_config = manifest.get("config")
+        if not isinstance(stored_config, dict):
+            raise ValueError("Study manifest does not contain the original config.")
+        stored_signature = {
+            "name": stored_config.get("name"),
+            "training_config": stored_config.get("training_config"),
+            "evaluation_config": stored_config.get("evaluation_config"),
+            "required_gtsrb_strategy": stored_config.get("required_gtsrb_strategy"),
+            "gtsrb_checkpoint": stored_config.get("gtsrb_checkpoint"),
+            "common_training_overrides": stored_config.get("common_training_overrides", []),
+            "common_evaluation_overrides": stored_config.get("common_evaluation_overrides", []),
+            "experiments": stored_config.get("experiments", []),
+        }
+        current_signature = _scientific_study_signature(config)
+        if stored_signature != current_signature:
+            raise ValueError(
+                "The matrix scientific configuration changed since this study "
+                "was created. Start a new study instead of resuming it."
+            )
         return str(manifest["study_id"]), study_dir, manifest
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -376,10 +411,9 @@ def _classification_checkpoint_metadata(
     validation_loss = checkpoint.get("best_validation_loss")
     if validation_loss is None:
         monitor = checkpoint.get("monitor")
-        if monitor == "validation_loss":
+        if monitor in {"validation_loss", "validation_total_loss"}:
             validation_loss = checkpoint.get("monitored_value")
-    if validation_loss is None:
-        validation_loss = checkpoint.get("best_metric")
+    # Do not use a generic best_metric fallback: it may be accuracy or F1.
 
     normalized_loss = None
     if validation_loss is not None:

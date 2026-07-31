@@ -10,8 +10,8 @@ from Exercise3.data_pipeline.loading import (
     DEFAULT_REPORT_PATH,
     inspect_dataset,
     load_detection_dataset,
-    print_dataset_report,
-    save_dataset_report,
+    print_dataset_inspection,
+    save_dataset_inspection,
 )
 
 
@@ -73,8 +73,8 @@ def main() -> None:
         max_objects=arguments.max_objects,
     )
 
-    print_dataset_report(report)
-    report_path = save_dataset_report(report, arguments.report_path)
+    print_dataset_inspection(report)
+    report_path = save_dataset_inspection(report, arguments.report_path)
     print(f"\nInspection report saved to: {report_path}")
 
 

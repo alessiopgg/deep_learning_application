@@ -33,6 +33,11 @@ class ExperimentTracker:
                 "tracking.use_wandb=true but the wandb package is not installed."
             ) from error
 
+        model_config = config.get("model", {})
+        backbone_source = str(model_config.get("backbone_source", "coco"))
+        trainable_backbone = str(
+            model_config.get("trainable_backbone", "frozen")
+        )
         init_arguments: dict[str, Any] = {
             "project": project,
             "entity": entity,
@@ -41,7 +46,12 @@ class ExperimentTracker:
             "name": run_name,
             "config": config,
             "job_type": "faster-rcnn-training",
-            "tags": ["exercise-3-3", "faster-rcnn", "coco-backbone"],
+            "tags": [
+                "exercise-3-3",
+                "faster-rcnn",
+                f"backbone-{backbone_source}",
+                f"trainable-{trainable_backbone}",
+            ],
         }
         if resume_run_id is not None:
             init_arguments["id"] = resume_run_id

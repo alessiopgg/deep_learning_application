@@ -1,4 +1,4 @@
-"""OmegaConf configuration for the Exercise 3.3 Faster R-CNN baseline."""
+"""OmegaConf configuration for Exercise 3.3 detector training."""
 
 from __future__ import annotations
 
@@ -35,6 +35,11 @@ class DataConfig:
 class ModelConfig:
     architecture: str = "fasterrcnn_resnet50_fpn"
     weights: str = "coco"
+    backbone_source: str = "coco"
+    gtsrb_checkpoint: str | None = None
+    required_gtsrb_strategy: str | None = "full"
+    trainable_backbone: str = "frozen"
+    # Backward-compatible alias. It must agree with trainable_backbone.
     freeze_backbone: bool = True
     num_classes: int = 44
     progress: bool = True
@@ -43,7 +48,10 @@ class ModelConfig:
 @dataclass
 class OptimizerConfig:
     name: str = "sgd"
+    # Detector heads / RPN learning rate.
     learning_rate: float = 0.005
+    # Used only when layer3/layer4/FPN are trainable.
+    backbone_learning_rate: float = 0.0001
     momentum: float = 0.9
     weight_decay: float = 0.0005
 
@@ -111,9 +119,8 @@ class BaselineTrainingConfig:
 def parse_config_arguments(
     arguments: Sequence[str] | None = None,
 ) -> tuple[Path, list[str]]:
-    """Parse only --config; every remaining token is an OmegaConf override."""
     parser = argparse.ArgumentParser(
-        description="Train the Exercise 3.3 Faster R-CNN baseline.",
+        description="Train the Exercise 3.3 Faster R-CNN detector.",
         add_help=True,
     )
     parser.add_argument(
@@ -136,7 +143,6 @@ def load_training_config(
     config_path: Path,
     overrides: Sequence[str] | None = None,
 ) -> BaselineTrainingConfig:
-    """Load defaults, YAML and command-line overrides in increasing priority."""
     resolved_path = config_path.expanduser()
     if not resolved_path.is_absolute():
         resolved_path = Path.cwd() / resolved_path
@@ -170,30 +176,55 @@ def validate_training_config(config: BaselineTrainingConfig) -> None:
 
     if config.model.architecture != "fasterrcnn_resnet50_fpn":
         raise ValueError(
-            "The baseline supports only model.architecture="
-            "fasterrcnn_resnet50_fpn."
+            "Only model.architecture=fasterrcnn_resnet50_fpn is supported."
         )
     if config.model.weights not in {"coco", "none"}:
         raise ValueError("model.weights must be coco or none.")
-    if not config.model.freeze_backbone:
+    if config.model.backbone_source not in {"coco", "gtsrb"}:
+        raise ValueError("model.backbone_source must be coco or gtsrb.")
+    if config.model.trainable_backbone not in {
+        "frozen",
+        "layer4",
+        "layer3_layer4",
+    }:
         raise ValueError(
-            "Step 11 is the frozen-backbone baseline; "
-            "model.freeze_backbone must remain true."
+            "model.trainable_backbone must be frozen, layer4 or layer3_layer4."
+        )
+    expected_freeze = config.model.trainable_backbone == "frozen"
+    if config.model.freeze_backbone != expected_freeze:
+        raise ValueError(
+            "model.freeze_backbone conflicts with model.trainable_backbone."
+        )
+    if config.model.backbone_source == "gtsrb" and not config.model.gtsrb_checkpoint:
+        raise ValueError(
+            "model.backbone_source=gtsrb requires model.gtsrb_checkpoint."
+        )
+    if config.model.backbone_source == "gtsrb" and config.model.weights != "coco":
+        raise ValueError(
+            "GTSRB runs must retain COCO initialization for FPN/RPN/RoI heads."
         )
     if config.model.num_classes != 44:
         raise ValueError("The verified detector taxonomy requires 44 classes.")
 
     if config.optimizer.name != "sgd":
-        raise ValueError("The Step 11 baseline supports optimizer.name=sgd.")
+        raise ValueError("optimizer.name must be sgd.")
     if config.optimizer.learning_rate <= 0:
         raise ValueError("optimizer.learning_rate must be greater than zero.")
+    if config.optimizer.backbone_learning_rate <= 0:
+        raise ValueError(
+            "optimizer.backbone_learning_rate must be greater than zero."
+        )
+    if config.optimizer.backbone_learning_rate > config.optimizer.learning_rate:
+        raise ValueError(
+            "optimizer.backbone_learning_rate cannot exceed detector LR."
+        )
     if not 0 <= config.optimizer.momentum < 1:
         raise ValueError("optimizer.momentum must satisfy 0 <= momentum < 1.")
     if config.optimizer.weight_decay < 0:
         raise ValueError("optimizer.weight_decay cannot be negative.")
 
     if config.scheduler.name != "step_lr":
-        raise ValueError("The Step 11 baseline supports scheduler.name=step_lr.")
+        raise ValueError("scheduler.name must be step_lr.")
     if config.scheduler.step_size <= 0:
         raise ValueError("scheduler.step_size must be greater than zero.")
     if not 0 < config.scheduler.gamma <= 1:
@@ -220,16 +251,12 @@ def validate_training_config(config: BaselineTrainingConfig) -> None:
             raise ValueError(f"training.{name} must be null or greater than zero.")
 
     if config.checkpoint.monitor != "validation_total_loss":
-        raise ValueError(
-            "Step 11 currently monitors checkpoint.validation_total_loss only."
-        )
+        raise ValueError("checkpoint.monitor must be validation_total_loss.")
     if config.checkpoint.mode != "min":
         raise ValueError("validation_total_loss requires checkpoint.mode=min.")
 
     if config.tracking.mode not in {"online", "offline", "disabled"}:
-        raise ValueError(
-            "tracking.mode must be online, offline or disabled."
-        )
+        raise ValueError("tracking.mode must be online, offline or disabled.")
     if config.experiment.seed < 0:
         raise ValueError("experiment.seed must be non-negative.")
 
@@ -247,8 +274,6 @@ def resolve_cache_dir(config: BaselineTrainingConfig) -> Path | None:
 
 def resolve_output_root(config: BaselineTrainingConfig) -> Path:
     path = resolve_exercise_path(config.paths.output_dir)
-    # Protect against accidentally resolving to the whole Exercise3 output root
-    # when the configuration value is empty.
     if path == OUTPUT_DIR:
         raise ValueError(
             "paths.output_dir must identify a run collection below outputs/."
@@ -260,12 +285,10 @@ def save_resolved_config(
     config: BaselineTrainingConfig,
     run_dir: Path,
 ) -> tuple[Path, Path]:
-    """Save the exact resolved configuration in YAML and JSON formats."""
     run_dir.mkdir(parents=True, exist_ok=True)
     config_dict = config.to_dict()
     yaml_path = run_dir / "config.yaml"
     json_path = run_dir / "config.json"
-
     yaml_path.write_text(
         OmegaConf.to_yaml(OmegaConf.create(config_dict), resolve=True),
         encoding="utf-8",
@@ -281,19 +304,11 @@ def validate_resume_compatibility(
     current: BaselineTrainingConfig,
     checkpoint_config: dict[str, Any],
 ) -> None:
-    """Reject resume attempts that would silently change the experiment."""
     current_dict = current.to_dict()
-    required_paths = (
-        "data",
-        "model",
-        "optimizer",
-        "scheduler",
-    )
-    for key in required_paths:
+    for key in ("data", "model", "optimizer", "scheduler"):
         if checkpoint_config.get(key) != current_dict.get(key):
             raise ValueError(
-                f"Resume configuration mismatch in section {key!r}. "
-                "Use the same settings as the original run."
+                f"Resume configuration mismatch in section {key!r}."
             )
 
     checkpoint_training = checkpoint_config.get("training", {})
