@@ -1,82 +1,127 @@
-"""Entry point for Exercise 3.3 dataset inspection."""
+﻿"""Unified command-line entry point for Exercise 3.
+
+This module provides one public CLI while keeping the implementation
+of dataset inspection, analysis, training, evaluation and experiment
+orchestration in their dedicated modules.
+"""
 
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
-
-from Exercise3.data_pipeline.loading import (
-    DEFAULT_CACHE_DIR,
-    DEFAULT_REPORT_PATH,
-    inspect_dataset,
-    load_detection_dataset,
-    print_dataset_inspection,
-    save_dataset_inspection,
-)
+import subprocess
+import sys
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 
-def parse_arguments() -> argparse.Namespace:
-    """Parse the options needed by step 2."""
-    parser = argparse.ArgumentParser(
+@dataclass(frozen=True)
+class CommandSpec:
+    """Describe a command delegated to another Exercise3 module."""
+
+    module: str
+    description: str
+
+
+COMMANDS: dict[str, CommandSpec] = {
+    "inspect": CommandSpec(
+        module="Exercise3.inspect_dataset",
+        description="Load and inspect the detection dataset.",
+    ),
+    "eda": CommandSpec(
+        module="Exercise3.analysis.eda",
+        description="Run exploratory data analysis.",
+    ),
+    "class-mapping": CommandSpec(
+        module="Exercise3.analysis.class_mapping",
+        description="Validate the detection-to-GTSRB class mapping.",
+    ),
+    "train": CommandSpec(
+        module="Exercise3.train_baseline",
+        description="Train one Faster R-CNN detector configuration.",
+    ),
+    "evaluate": CommandSpec(
+        module="Exercise3.evaluate_detector",
+        description="Evaluate a detector checkpoint.",
+    ),
+    "matrix": CommandSpec(
+        module="Exercise3.run_experiment_matrix",
+        description="Run or resume the A-D experiment matrix.",
+    ),
+}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the top-level parser used only to select a command."""
+
+    command_lines = "\n".join(
+        f"  {name:<15} {spec.description}"
+        for name, spec in COMMANDS.items()
+    )
+
+    return argparse.ArgumentParser(
+        prog="python -m Exercise3.main",
         description=(
-            "Load and inspect the German traffic-sign detection dataset "
-            "without constructing a detector."
+            "Unified entry point for Exercise 3. Arguments written after "
+            "the command are forwarded unchanged to the selected module."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Available commands:\n"
+            f"{command_lines}\n\n"
+            "Examples:\n"
+            "  python -m Exercise3.main inspect --split train\n"
+            "  python -m Exercise3.main eda\n"
+            "  python -m Exercise3.main train "
+            "--config Exercise3/configs/baseline.yaml\n"
+            "  python -m Exercise3.main evaluate --help\n"
+            "  python -m Exercise3.main matrix --preflight-only --no-wandb"
+        ),
+    )
+
+
+def run_module(module: str, arguments: Sequence[str]) -> int:
+    """Execute an Exercise3 module in an isolated Python subprocess."""
+
+    command = [
+        sys.executable,
+        "-m",
+        module,
+        *arguments,
+    ]
+
+    print("$ " + " ".join(command), flush=True)
+    completed_process = subprocess.run(
+        command,
+        check=False,
+    )
+    return int(completed_process.returncode)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Select a command and forward the remaining arguments."""
+
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    parser = build_parser()
+
+    if not arguments or arguments[0] in {"-h", "--help"}:
+        parser.print_help()
+        return 0
+
+    command_name = arguments[0]
+    command_spec = COMMANDS.get(command_name)
+
+    if command_spec is None:
+        available = ", ".join(COMMANDS)
+        parser.error(
+            f"unknown command {command_name!r}. "
+            f"Available commands: {available}"
         )
-    )
-    parser.add_argument(
-        "--cache-dir",
-        type=Path,
-        default=DEFAULT_CACHE_DIR,
-        help="Hugging Face cache path, relative to Exercise3 if needed.",
-    )
-    parser.add_argument(
-        "--split",
-        default="train",
-        help="Split to inspect: train, validation or test.",
-    )
-    parser.add_argument(
-        "--sample-index",
-        type=int,
-        default=0,
-        help="Zero-based sample index inside the selected split.",
-    )
-    parser.add_argument(
-        "--max-objects",
-        type=int,
-        default=10,
-        help="Maximum annotations printed for the selected sample.",
-    )
-    parser.add_argument(
-        "--report-path",
-        type=Path,
-        default=DEFAULT_REPORT_PATH,
-        help="JSON report path, relative to Exercise3 if needed.",
-    )
-    return parser.parse_args()
 
-
-def main() -> None:
-    """Load the dataset, inspect it and save the resulting report."""
-    arguments = parse_arguments()
-
-    if arguments.sample_index < 0:
-        raise ValueError("--sample-index must be greater than or equal to zero.")
-    if arguments.max_objects <= 0:
-        raise ValueError("--max-objects must be greater than zero.")
-
-    dataset, cache_dir = load_detection_dataset(arguments.cache_dir)
-    report = inspect_dataset(
-        dataset=dataset,
-        cache_dir=cache_dir,
-        split_name=arguments.split,
-        sample_index=arguments.sample_index,
-        max_objects=arguments.max_objects,
+    return run_module(
+        command_spec.module,
+        arguments[1:],
     )
-
-    print_dataset_inspection(report)
-    report_path = save_dataset_inspection(report, arguments.report_path)
-    print(f"\nInspection report saved to: {report_path}")
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
