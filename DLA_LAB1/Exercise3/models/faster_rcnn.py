@@ -1,11 +1,8 @@
-"""Faster R-CNN construction and backbone-transfer policies for Exercise 3.3."""
+"""Faster R-CNN construction and trainability policies for Exercise 3.3."""
 
 from __future__ import annotations
 
-import hashlib
-from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import Any, Literal
 
 import torch
@@ -18,21 +15,16 @@ from torchvision.models.detection import (
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 
 from Exercise3.data_pipeline.taxonomy import NUM_DETECTOR_CLASSES
-from Exercise3.paths import PROJECT_ROOT
+from Exercise3.models.gtsrb_transfer import (
+    load_gtsrb_backbone,
+    resolve_project_path,
+    tensor_sha256,
+)
 
 
 WeightsChoice = Literal["coco", "none"]
 BackboneSource = Literal["coco", "gtsrb"]
 TrainableBackbone = Literal["frozen", "layer4", "layer3_layer4"]
-
-_TRANSFER_PREFIXES = (
-    "conv1.",
-    "bn1.",
-    "layer1.",
-    "layer2.",
-    "layer3.",
-    "layer4.",
-)
 
 
 @dataclass(frozen=True)
@@ -58,13 +50,16 @@ class FasterRCNNBaselineConfig:
 
     def validate(self) -> None:
         if self.architecture != "fasterrcnn_resnet50_fpn":
-            raise ValueError("Only 'fasterrcnn_resnet50_fpn' is supported.")
+            raise ValueError(
+                "Only 'fasterrcnn_resnet50_fpn' is supported."
+            )
         if self.weights not in {"coco", "none"}:
             raise ValueError("weights must be either 'coco' or 'none'.")
         if self.num_classes != NUM_DETECTOR_CLASSES:
             raise ValueError(
                 "The verified taxonomy requires exactly "
-                f"{NUM_DETECTOR_CLASSES} detector classes including background."
+                f"{NUM_DETECTOR_CLASSES} detector classes including "
+                "background."
             )
         if self.backbone_source not in {"coco", "gtsrb"}:
             raise ValueError("backbone_source must be coco or gtsrb.")
@@ -74,24 +69,27 @@ class FasterRCNNBaselineConfig:
             "layer3_layer4",
         }:
             raise ValueError(
-                "trainable_backbone must be frozen, layer4 or layer3_layer4."
+                "trainable_backbone must be frozen, layer4 or "
+                "layer3_layer4."
             )
         if self.freeze_backbone is not None:
             expected = self.trainable_backbone == "frozen"
             if bool(self.freeze_backbone) != expected:
                 raise ValueError(
                     "freeze_backbone conflicts with trainable_backbone. "
-                    "Use freeze_backbone=true only with trainable_backbone=frozen."
+                    "Use freeze_backbone=true only with "
+                    "trainable_backbone=frozen."
                 )
         if self.backbone_source == "gtsrb":
             if not self.gtsrb_checkpoint:
                 raise ValueError(
-                    "backbone_source=gtsrb requires model.gtsrb_checkpoint."
+                    "backbone_source=gtsrb requires "
+                    "model.gtsrb_checkpoint."
                 )
             if self.weights != "coco":
                 raise ValueError(
-                    "GTSRB runs must start from the COCO detector so FPN, RPN and "
-                    "RoI heads keep the same initialization as Run A."
+                    "GTSRB runs must start from the COCO detector so FPN, "
+                    "RPN and RoI heads keep the same initialization as Run A."
                 )
         if self.seed < 0:
             raise ValueError("seed must be non-negative.")
@@ -108,7 +106,11 @@ class ParameterCount:
 
     @property
     def trainable_percentage(self) -> float:
-        return 0.0 if self.total == 0 else 100.0 * self.trainable / self.total
+        return (
+            0.0
+            if self.total == 0
+            else 100.0 * self.trainable / self.total
+        )
 
     def to_dict(self) -> dict[str, int | float]:
         return {
@@ -126,12 +128,11 @@ def _count_parameters(module: nn.Module) -> ParameterCount:
         for parameter in module.parameters()
         if parameter.requires_grad
     )
-    return ParameterCount(total=total, trainable=trainable, frozen=total-trainable)
-
-
-def _tensor_sha256(tensor: torch.Tensor) -> str:
-    contiguous = tensor.detach().cpu().contiguous()
-    return hashlib.sha256(contiguous.numpy().tobytes()).hexdigest()
+    return ParameterCount(
+        total=total,
+        trainable=trainable,
+        frozen=total - trainable,
+    )
 
 
 def _resolve_weights(
@@ -142,186 +143,6 @@ def _resolve_weights(
     if choice == "none":
         return None
     raise ValueError(f"Unsupported weights choice: {choice}")
-
-
-def _resolve_project_path(value: str | Path) -> Path:
-    path = Path(value).expanduser()
-    return path if path.is_absolute() else PROJECT_ROOT / path
-
-
-def _load_checkpoint(path: Path) -> dict[str, Any]:
-    if not path.is_file():
-        raise FileNotFoundError(f"GTSRB checkpoint not found: {path}")
-    try:
-        payload = torch.load(path, map_location="cpu", weights_only=False)
-    except TypeError:
-        payload = torch.load(path, map_location="cpu")
-    if not isinstance(payload, dict):
-        raise TypeError("GTSRB checkpoint root must be a dictionary.")
-    return payload
-
-
-def _extract_state_dict(checkpoint: Mapping[str, Any]) -> Mapping[str, torch.Tensor]:
-    state_dict = checkpoint.get("model_state_dict")
-    if not isinstance(state_dict, Mapping):
-        state_dict = checkpoint.get("state_dict")
-    if not isinstance(state_dict, Mapping):
-        raise KeyError(
-            "GTSRB checkpoint must contain model_state_dict or state_dict."
-        )
-    if not all(isinstance(key, str) for key in state_dict):
-        raise TypeError("Checkpoint state-dict keys must be strings.")
-    return state_dict  # type: ignore[return-value]
-
-
-def _checkpoint_model_and_strategy(
-    checkpoint: Mapping[str, Any],
-) -> tuple[str | None, str | None]:
-    config = checkpoint.get("config", {})
-    model_name: str | None = None
-    strategy: str | None = None
-    if isinstance(config, Mapping):
-        model_section = config.get("model")
-        if isinstance(model_section, Mapping):
-            raw_model = model_section.get("name")
-            raw_strategy = model_section.get("fine_tuning_strategy")
-            model_name = None if raw_model is None else str(raw_model)
-            strategy = None if raw_strategy is None else str(raw_strategy)
-        elif isinstance(model_section, str):
-            model_name = model_section
-        if strategy is None and config.get("strategy") is not None:
-            strategy = str(config.get("strategy"))
-    return model_name, strategy
-
-
-def _normalize_source_key(key: str) -> str:
-    normalized = key
-    changed = True
-    while changed:
-        changed = False
-        for prefix in ("module.", "model."):
-            if normalized.startswith(prefix):
-                normalized = normalized[len(prefix):]
-                changed = True
-    for prefix in ("backbone.body.", "backbone.", "body."):
-        if normalized.startswith(prefix):
-            normalized = normalized[len(prefix):]
-            break
-    return normalized
-
-
-def _load_gtsrb_backbone(
-    model: FasterRCNN,
-    *,
-    checkpoint_path: Path,
-    required_strategy: str | None,
-) -> dict[str, Any]:
-    checkpoint = _load_checkpoint(checkpoint_path)
-    state_dict = _extract_state_dict(checkpoint)
-    checkpoint_model, checkpoint_strategy = _checkpoint_model_and_strategy(checkpoint)
-
-    if (checkpoint_model or "").strip().lower() != "resnet50":
-        raise ValueError(
-            "The GTSRB checkpoint must contain config.model.name=resnet50; "
-            f"found {checkpoint_model!r}."
-        )
-    if required_strategy is not None:
-        actual = None if checkpoint_strategy is None else checkpoint_strategy.strip().lower()
-        expected = required_strategy.strip().lower()
-        if actual != expected:
-            raise ValueError(
-                "The GTSRB checkpoint has the wrong fine-tuning strategy: "
-                f"expected {expected!r}, found {actual!r}."
-            )
-
-    normalized_source: dict[str, torch.Tensor] = {}
-    original_keys: dict[str, str] = {}
-    for source_key, value in state_dict.items():
-        if not torch.is_tensor(value):
-            continue
-        normalized = _normalize_source_key(source_key)
-        if normalized in normalized_source:
-            raise ValueError(
-                "Multiple checkpoint tensors map to the same normalized key "
-                f"{normalized!r}: {original_keys[normalized]!r}, {source_key!r}."
-            )
-        normalized_source[normalized] = value.detach().cpu()
-        original_keys[normalized] = source_key
-
-    body = model.backbone.body
-    target_state = body.state_dict()
-    target_keys = [
-        key for key in target_state if key.startswith(_TRANSFER_PREFIXES)
-    ]
-    if set(target_keys) != set(target_state):
-        unexpected_target = sorted(set(target_state) - set(target_keys))
-        raise ValueError(
-            "The Faster R-CNN ResNet body exposes unexpected tensors outside "
-            f"conv1/bn1/layer1..4: {unexpected_target[:10]}"
-        )
-
-    missing = [key for key in target_keys if key not in normalized_source]
-    if missing:
-        raise KeyError(
-            "GTSRB checkpoint is missing backbone tensors: "
-            + ", ".join(missing[:20])
-        )
-
-    shape_mismatches: list[dict[str, Any]] = []
-    for key in target_keys:
-        source = normalized_source[key]
-        target = target_state[key]
-        if tuple(source.shape) != tuple(target.shape):
-            shape_mismatches.append(
-                {
-                    "key": key,
-                    "source_shape": list(source.shape),
-                    "target_shape": list(target.shape),
-                }
-            )
-    if shape_mismatches:
-        raise ValueError(f"GTSRB backbone shape mismatches: {shape_mismatches[:5]}")
-
-    representative_name = "conv1.weight"
-    before_checksum = _tensor_sha256(target_state[representative_name])
-    copied = {key: normalized_source[key].to(dtype=target_state[key].dtype) for key in target_keys}
-    with torch.no_grad():
-        body.load_state_dict(copied, strict=True)
-
-    loaded_state = body.state_dict()
-    verification_failures = [
-        key
-        for key in target_keys
-        if not torch.equal(loaded_state[key].cpu(), copied[key].cpu())
-    ]
-    after_checksum = _tensor_sha256(loaded_state[representative_name])
-
-    excluded_classifier_keys = sorted(
-        key
-        for key in normalized_source
-        if key.startswith("fc.") or key.startswith("avgpool.")
-    )
-    return {
-        "checkpoint_path": str(checkpoint_path),
-        "checkpoint_model": checkpoint_model,
-        "checkpoint_strategy": checkpoint_strategy,
-        "target_modules": ["conv1", "bn1", "layer1", "layer2", "layer3", "layer4"],
-        "excluded_modules": ["avgpool", "fc"],
-        "excluded_classifier_keys_present": excluded_classifier_keys,
-        "target_tensor_count": len(target_keys),
-        "loaded_tensor_count": len(copied),
-        "all_target_tensors_loaded": len(copied) == len(target_keys),
-        "shape_mismatches": shape_mismatches,
-        "verification_failures": verification_failures,
-        "exact_post_load_verification": not verification_failures,
-        "representative_tensor": "backbone.body.conv1.weight",
-        "representative_sha256_before_coco": before_checksum,
-        "representative_sha256_after_gtsrb": after_checksum,
-        "representative_tensor_changed_from_coco": before_checksum != after_checksum,
-        "source_key_examples": {
-            key: original_keys[key] for key in target_keys[:10]
-        },
-    }
 
 
 def _set_requires_grad(module: nn.Module, enabled: bool) -> None:
@@ -338,7 +159,9 @@ def configure_backbone_trainability(
     policy: TrainableBackbone,
 ) -> None:
     """Apply the frozen/layer4/layer3+layer4 policy to body and FPN."""
+
     freeze_complete_backbone(model)
+
     if policy == "frozen":
         return
     if policy == "layer4":
@@ -350,6 +173,7 @@ def configure_backbone_trainability(
         _set_requires_grad(model.backbone.body.layer4, True)
         _set_requires_grad(model.backbone.fpn, True)
         return
+
     raise ValueError(f"Unsupported trainable_backbone policy: {policy}")
 
 
@@ -359,22 +183,29 @@ def configure_model_for_training(
     trainable_backbone: TrainableBackbone | None = None,
     freeze_backbone: bool | None = None,
 ) -> None:
-    """Set detector train mode while frozen ResNet stages remain in eval mode."""
+    """Set detector train mode while frozen ResNet stages remain in eval."""
+
     if trainable_backbone is None:
         if freeze_backbone is None or freeze_backbone:
             policy: TrainableBackbone = "frozen"
         else:
             raise ValueError(
-                "freeze_backbone=False is ambiguous. Pass trainable_backbone="
-                "layer4 or layer3_layer4 explicitly."
+                "freeze_backbone=False is ambiguous. Pass "
+                "trainable_backbone=layer4 or layer3_layer4 explicitly."
             )
     else:
         policy = trainable_backbone
-        if freeze_backbone is not None and freeze_backbone != (policy == "frozen"):
-            raise ValueError("freeze_backbone conflicts with trainable_backbone.")
+        if (
+            freeze_backbone is not None
+            and freeze_backbone != (policy == "frozen")
+        ):
+            raise ValueError(
+                "freeze_backbone conflicts with trainable_backbone."
+            )
 
     model.train()
     body = model.backbone.body
+
     if policy == "frozen":
         model.backbone.eval()
         return
@@ -382,6 +213,7 @@ def configure_model_for_training(
     # Start from eval for every body stage, then enable only trainable stages.
     body.eval()
     model.backbone.fpn.train()
+
     if policy == "layer4":
         body.layer4.train()
         return
@@ -389,12 +221,15 @@ def configure_model_for_training(
         body.layer3.train()
         body.layer4.train()
         return
+
     raise ValueError(f"Unsupported trainable_backbone policy: {policy}")
 
 
 def build_faster_rcnn_baseline(
     config: FasterRCNNBaselineConfig | None = None,
 ) -> tuple[FasterRCNN, dict[str, Any]]:
+    """Construct one detector and apply the requested backbone policy."""
+
     resolved_config = config or FasterRCNNBaselineConfig()
     resolved_config.validate()
 
@@ -411,7 +246,9 @@ def build_faster_rcnn_baseline(
 
     old_predictor = model.roi_heads.box_predictor
     old_num_classes = int(old_predictor.cls_score.out_features)
-    predictor_input_features = int(old_predictor.cls_score.in_features)
+    predictor_input_features = int(
+        old_predictor.cls_score.in_features
+    )
 
     torch.manual_seed(resolved_config.seed)
     model.roi_heads.box_predictor = FastRCNNPredictor(
@@ -421,16 +258,19 @@ def build_faster_rcnn_baseline(
 
     gtsrb_transfer: dict[str, Any] | None = None
     if resolved_config.backbone_source == "gtsrb":
-        checkpoint_path = _resolve_project_path(
+        checkpoint_path = resolve_project_path(
             str(resolved_config.gtsrb_checkpoint)
         ).resolve()
-        gtsrb_transfer = _load_gtsrb_backbone(
+        gtsrb_transfer = load_gtsrb_backbone(
             model,
             checkpoint_path=checkpoint_path,
             required_strategy=resolved_config.required_gtsrb_strategy,
         )
 
-    configure_backbone_trainability(model, resolved_config.trainable_backbone)
+    configure_backbone_trainability(
+        model,
+        resolved_config.trainable_backbone,
+    )
     configure_model_for_training(
         model,
         trainable_backbone=resolved_config.trainable_backbone,
@@ -443,7 +283,9 @@ def build_faster_rcnn_baseline(
             if weights is not None
             else "none"
         ),
-        "weights_enum_name": weights.name if weights is not None else None,
+        "weights_enum_name": (
+            weights.name if weights is not None else None
+        ),
         "weights_url": weights.url if weights is not None else None,
         "original_predictor_num_classes": old_num_classes,
         "new_predictor_num_classes": int(
@@ -454,13 +296,18 @@ def build_faster_rcnn_baseline(
             model.roi_heads.box_predictor.bbox_pred.out_features
         ),
         "background_label": 0,
-        "foreground_label_range": [1, resolved_config.num_classes - 1],
+        "foreground_label_range": [
+            1,
+            resolved_config.num_classes - 1,
+        ],
         "backbone_source": resolved_config.backbone_source,
         "trainable_backbone": resolved_config.trainable_backbone,
         "backbone_frozen": resolved_config.backbone_is_frozen,
         "backbone_training_mode": bool(model.backbone.training),
-        "representative_backbone_tensor": "backbone.body.conv1.weight",
-        "representative_backbone_sha256": _tensor_sha256(
+        "representative_backbone_tensor": (
+            "backbone.body.conv1.weight"
+        ),
+        "representative_backbone_sha256": tensor_sha256(
             model.backbone.body.conv1.weight
         ),
         "gtsrb_transfer": gtsrb_transfer,
@@ -473,6 +320,8 @@ def summarize_faster_rcnn(
     model: FasterRCNN,
     construction_metadata: dict[str, Any],
 ) -> dict[str, Any]:
+    """Build and validate a parameter/mode audit for one detector."""
+
     components: dict[str, nn.Module] = {
         "backbone": model.backbone,
         "backbone.body.layer3": model.backbone.body.layer3,
@@ -483,13 +332,15 @@ def summarize_faster_rcnn(
         "roi_heads.box_predictor": model.roi_heads.box_predictor,
     }
     component_counts = {
-        name: _count_parameters(module) for name, module in components.items()
+        name: _count_parameters(module)
+        for name, module in components.items()
     }
     complete_count = _count_parameters(model)
 
     trainable_components: list[str] = []
     frozen_components: list[str] = []
     partially_trainable_components: list[str] = []
+
     for name, count in component_counts.items():
         if count.total == 0:
             continue
@@ -501,21 +352,29 @@ def summarize_faster_rcnn(
             partially_trainable_components.append(name)
 
     trainable_names = [
-        name for name, parameter in model.named_parameters() if parameter.requires_grad
+        name
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad
     ]
     frozen_names = [
-        name for name, parameter in model.named_parameters() if not parameter.requires_grad
+        name
+        for name, parameter in model.named_parameters()
+        if not parameter.requires_grad
     ]
+
     report = {
         **construction_metadata,
         "parameters": {
             "model": complete_count.to_dict(),
             "components": {
-                name: count.to_dict() for name, count in component_counts.items()
+                name: count.to_dict()
+                for name, count in component_counts.items()
             },
             "trainable_components": trainable_components,
             "frozen_components": frozen_components,
-            "partially_trainable_components": partially_trainable_components,
+            "partially_trainable_components": (
+                partially_trainable_components
+            ),
             "trainable_parameter_tensor_count": len(trainable_names),
             "frozen_parameter_tensor_count": len(frozen_names),
             "first_trainable_parameter_names": trainable_names[:20],
@@ -524,9 +383,15 @@ def summarize_faster_rcnn(
         "model_modes": {
             "model_training": bool(model.training),
             "backbone_training": bool(model.backbone.training),
-            "backbone_body_training": bool(model.backbone.body.training),
-            "layer3_training": bool(model.backbone.body.layer3.training),
-            "layer4_training": bool(model.backbone.body.layer4.training),
+            "backbone_body_training": bool(
+                model.backbone.body.training
+            ),
+            "layer3_training": bool(
+                model.backbone.body.layer3.training
+            ),
+            "layer4_training": bool(
+                model.backbone.body.layer4.training
+            ),
             "fpn_training": bool(model.backbone.fpn.training),
             "rpn_training": bool(model.rpn.training),
             "roi_heads_training": bool(model.roi_heads.training),
@@ -538,32 +403,57 @@ def summarize_faster_rcnn(
 
 def _validate_model_report(report: dict[str, Any]) -> None:
     expected_classes = NUM_DETECTOR_CLASSES
+
     if report["new_predictor_num_classes"] != expected_classes:
-        raise ValueError("The classification head has the wrong output size.")
+        raise ValueError(
+            "The classification head has the wrong output size."
+        )
     if report["bbox_regression_outputs"] != expected_classes * 4:
-        raise ValueError("The box regressor must output four values per class.")
+        raise ValueError(
+            "The box regressor must output four values per class."
+        )
 
     components = report["parameters"]["components"]
     policy = report["trainable_backbone"]
+
     if policy == "frozen":
         if components["backbone"]["trainable"] != 0:
             raise ValueError("The complete backbone was not frozen.")
         if report["model_modes"]["backbone_training"]:
-            raise ValueError("A frozen backbone must remain in evaluation mode.")
+            raise ValueError(
+                "A frozen backbone must remain in evaluation mode."
+            )
     elif policy == "layer4":
         if components["backbone.body.layer3"]["trainable"] != 0:
-            raise ValueError("layer3 must be frozen for the layer4 policy.")
+            raise ValueError(
+                "layer3 must be frozen for the layer4 policy."
+            )
         if components["backbone.body.layer4"]["trainable"] == 0:
-            raise ValueError("layer4 must be trainable for the layer4 policy.")
+            raise ValueError(
+                "layer4 must be trainable for the layer4 policy."
+            )
         if components["backbone.fpn"]["trainable"] == 0:
-            raise ValueError("FPN must be trainable for the layer4 policy.")
+            raise ValueError(
+                "FPN must be trainable for the layer4 policy."
+            )
     elif policy == "layer3_layer4":
-        for name in ("backbone.body.layer3", "backbone.body.layer4", "backbone.fpn"):
+        for name in (
+            "backbone.body.layer3",
+            "backbone.body.layer4",
+            "backbone.fpn",
+        ):
             if components[name]["trainable"] == 0:
                 raise ValueError(f"{name} must be trainable.")
 
-    for required in ("rpn", "roi_heads.box_head", "roi_heads.box_predictor"):
+    for required in (
+        "rpn",
+        "roi_heads.box_head",
+        "roi_heads.box_predictor",
+    ):
         if components[required]["trainable"] == 0:
-            raise ValueError(f"Required component {required!r} is not trainable.")
+            raise ValueError(
+                f"Required component {required!r} is not trainable."
+            )
+
     if report["parameters"]["model"]["trainable"] <= 0:
         raise ValueError("The model has no trainable parameters.")

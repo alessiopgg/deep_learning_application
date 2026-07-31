@@ -1,0 +1,44 @@
+# Canonical GTSRB ResNet-50 checkpoint used by Exercise 3 runs B-D.
+
+source:
+  # Reuse the consolidated Exercise 2 classification pipeline without
+  # modifying Exercise 1 or Exercise 2.
+  exercise2_entrypoint: Exercise2/main.py
+  # These two paths are interpreted by Exercise 2 relative to Exercise2/.
+  exercise2_data_dir: ../data
+  exercise2_output_dir: ../Exercise3/checkpoints/training_runs
+
+output:
+  canonical_checkpoint: Exercise3/checkpoints/gtsrb_resnet50_full_linear.pt
+  metadata: Exercise3/checkpoints/gtsrb_resnet50_full_linear.json
+
+model:
+  name: resnet50
+  classifier_type: linear
+  fine_tuning_strategy: full
+  num_classes: 43
+
+data:
+  validation_size: 0.20
+  batch_size: 16
+  num_workers: 4
+  pin_memory: true
+
+training:
+  epochs: 5
+  backbone_learning_rate: 0.0001
+  classifier_learning_rate: 0.001
+  weight_decay: 0.0001
+
+checkpoint:
+  monitor: validation_loss
+  mode: min
+
+logging:
+  batch_interval: 50
+
+experiment:
+  seed: 42
+  device: cuda:0
+  deterministic: false
+  run_name: gtsrb-resnet50-full-linear

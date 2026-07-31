@@ -9,9 +9,9 @@ study:
   persistent_workers: true
   continue_on_error: false
 
-  # "auto" selects the compatible ResNet-50/full checkpoint with the lowest
-  # finite stored validation loss. An explicit path can override this policy.
-  gtsrb_checkpoint: auto
+  # Runs B-D use one explicit, reproducible checkpoint prepared with:
+  # python -m Exercise3.main prepare-backbone
+  gtsrb_checkpoint: Exercise3/checkpoints/gtsrb_resnet50_full_linear.pt
   required_gtsrb_strategy: full
 
   wandb_enabled: true

@@ -1,8 +1,8 @@
-﻿"""Unified command-line entry point for Exercise 3.
+"""Unified command-line entry point for Exercise 3.
 
 This module provides one public CLI while keeping the implementation
-of dataset inspection, analysis, training, evaluation and experiment
-orchestration in their dedicated modules.
+of dataset inspection, validation, backbone preparation, training,
+evaluation and experiment orchestration in their dedicated modules.
 """
 
 from __future__ import annotations
@@ -35,6 +35,14 @@ COMMANDS: dict[str, CommandSpec] = {
         module="Exercise3.analysis.class_mapping",
         description="Validate the detection-to-GTSRB class mapping.",
     ),
+    "check": CommandSpec(
+        module="Exercise3.checks.run_all",
+        description="Run the ordered Exercise 3 validation suite.",
+    ),
+    "prepare-backbone": CommandSpec(
+        module="Exercise3.backbone.prepare",
+        description="Train and publish the canonical GTSRB ResNet-50.",
+    ),
     "train": CommandSpec(
         module="Exercise3.train_baseline",
         description="Train one Faster R-CNN detector configuration.",
@@ -54,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the top-level parser used only to select a command."""
 
     command_lines = "\n".join(
-        f"  {name:<15} {spec.description}"
+        f"  {name:<18} {spec.description}"
         for name, spec in COMMANDS.items()
     )
 
@@ -70,7 +78,8 @@ def build_parser() -> argparse.ArgumentParser:
             f"{command_lines}\n\n"
             "Examples:\n"
             "  python -m Exercise3.main inspect --split train\n"
-            "  python -m Exercise3.main eda\n"
+            "  python -m Exercise3.main check --skip-smoke\n"
+            "  python -m Exercise3.main prepare-backbone --dry-run\n"
             "  python -m Exercise3.main train "
             "--config Exercise3/configs/baseline.yaml\n"
             "  python -m Exercise3.main evaluate --help\n"
