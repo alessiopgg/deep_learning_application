@@ -266,6 +266,7 @@ def main() -> None:
     training_output_root = _resolve_exercise2_output(
         config.source.exercise2_output_dir
     )
+    exercise2_runs_root = training_output_root / "runs"
 
     if arguments.validate_only:
         report = _validate_checkpoint(canonical_checkpoint)
@@ -299,11 +300,15 @@ def main() -> None:
     training_output_root.mkdir(parents=True, exist_ok=True)
     canonical_checkpoint.parent.mkdir(parents=True, exist_ok=True)
 
-    before = {
-        path.resolve()
-        for path in training_output_root.iterdir()
-        if path.is_dir()
-    }
+    before = (
+        {
+            path.resolve()
+            for path in exercise2_runs_root.iterdir()
+            if path.is_dir()
+        }
+        if exercise2_runs_root.is_dir()
+        else set()
+    )
     command = _exercise2_command(config)
 
     print("\n=== Exercise 3 - Prepare GTSRB backbone ===")
@@ -319,7 +324,7 @@ def main() -> None:
         check=True,
     )
 
-    run_dir = _new_run_directory(training_output_root, before)
+    run_dir = _new_run_directory(exercise2_runs_root, before)
     source_checkpoint = run_dir / "best_model.pt"
     if not source_checkpoint.is_file():
         raise FileNotFoundError(
