@@ -20,3 +20,44 @@
 
 # PyCharm
 .idea/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyCharm / IDE
+.idea/
+.vscode/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Experiment tracking
+wandb/
+
+# Generated experiment outputs
+Exercise1/outputs/
+Exercise2/outputs/
+Exercise3/outputs/
+
+# Model checkpoints
+*.pt
+*.pth
+*.ckpt
+
+# Logs
+*.log
+
+# Local caches
+.cache/
+huggingface/
+hf_cache/
+
+# Operating system
+.DS_Store
+Thumbs.db

@@ -1,0 +1,82 @@
+study:
+  name: exercise-3-3-backbone-study
+  output_dir: Exercise3/outputs/step_18/studies
+  training_config: Exercise3/configs/baseline.yaml
+  evaluation_config: Exercise3/configs/evaluation.yaml
+
+  device: cuda:0
+  num_workers: 4
+  persistent_workers: true
+  continue_on_error: false
+
+  # "auto" selects the compatible ResNet-50/full checkpoint with the lowest
+  # finite stored validation loss. An explicit path can override this policy.
+  gtsrb_checkpoint: auto
+  required_gtsrb_strategy: full
+
+  wandb_enabled: true
+  wandb_project: dla-lab1
+  wandb_entity: null
+  wandb_group: null
+  wandb_mode: online
+  log_best_checkpoints: false
+  log_evaluation_artifacts: true
+
+  common_training_overrides:
+    - data.train_batch_size=1
+    - data.evaluation_batch_size=1
+    - training.epochs=5
+    - training.max_train_batches=null
+    - training.max_validation_batches=null
+    - experiment.seed=42
+
+  common_evaluation_overrides:
+    - runtime.batch_size=1
+    - runtime.seed=42
+    - evaluation.max_batches=null
+    - evaluation.fixed_score_threshold=0.5
+    - evaluation.fixed_iou_threshold=0.5
+    - visualization.samples=5
+
+  experiments:
+    - id: A
+      name: coco-frozen
+      enabled: true
+      backbone_source: coco
+      trainable_backbone: frozen
+      detector_learning_rate: 0.005
+      backbone_learning_rate: 0.0001
+
+    - id: B
+      name: gtsrb-frozen
+      enabled: true
+      backbone_source: gtsrb
+      trainable_backbone: frozen
+      detector_learning_rate: 0.005
+      backbone_learning_rate: 0.0001
+
+    - id: C
+      name: gtsrb-layer4
+      enabled: true
+      backbone_source: gtsrb
+      trainable_backbone: layer4
+      detector_learning_rate: 0.005
+      backbone_learning_rate: 0.0001
+
+    - id: D
+      name: gtsrb-layer3-layer4
+      enabled: true
+      backbone_source: gtsrb
+      trainable_backbone: layer3_layer4
+      detector_learning_rate: 0.005
+      backbone_learning_rate: 0.0001
+
+    # Optional causal control: enable manually to compare COCO and GTSRB under
+    # the same layer4 fine-tuning policy.
+    - id: A2
+      name: coco-layer4
+      enabled: false
+      backbone_source: coco
+      trainable_backbone: layer4
+      detector_learning_rate: 0.005
+      backbone_learning_rate: 0.0001

@@ -1,0 +1,36 @@
+checkpoint:
+  path: null
+  strict: true
+
+runtime:
+  device: auto
+  amp: true
+  batch_size: 1
+  num_workers: 0
+  pin_memory: true
+  persistent_workers: false
+  seed: 42
+
+evaluation:
+  split: validation
+  allow_test: false
+  backend: auto
+  model_score_threshold: 0.0
+  fixed_score_threshold: 0.5
+  fixed_iou_threshold: 0.5
+  class_metrics: true
+  max_batches: null
+  save_predictions: true
+
+visualization:
+  enabled: true
+  samples: 5
+  score_threshold: 0.25
+  box_width: 4
+  font_path: null
+  font_size: 20
+
+output:
+  directory: null
+  save_training_plots: true
+  save_markdown_summary: true
