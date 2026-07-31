@@ -1,0 +1,57 @@
+paths:
+  cache_dir: null
+  output_dir: outputs/step_11/runs
+
+data:
+  train_batch_size: 1
+  evaluation_batch_size: 1
+  num_workers: 0
+  pin_memory: true
+  persistent_workers: false
+
+model:
+  architecture: fasterrcnn_resnet50_fpn
+  weights: coco
+  freeze_backbone: true
+  num_classes: 44
+  progress: true
+
+optimizer:
+  name: sgd
+  learning_rate: 0.005
+  momentum: 0.9
+  weight_decay: 0.0005
+
+scheduler:
+  name: step_lr
+  step_size: 3
+  gamma: 0.1
+
+training:
+  epochs: 5
+  amp: true
+  amp_initial_scale: 1024.0
+  gradient_clip_norm: null
+  logging_interval: 25
+  max_train_batches: null
+  max_validation_batches: null
+
+checkpoint:
+  monitor: validation_total_loss
+  mode: min
+  save_last: true
+
+tracking:
+  use_wandb: false
+  project: dla-lab1
+  entity: null
+  group: exercise-3-3-baseline
+  mode: online
+  log_best_checkpoint: false
+
+experiment:
+  seed: 42
+  device: auto
+  deterministic: false
+  run_name: null
+  resume_from: null
