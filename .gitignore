@@ -65,3 +65,8 @@ Thumbs.db
 DLA_LAB1/exercises.ipynb
 DLA_LAB1/Exercise3/DLA_Lab1_Exercise3_SUMMARY_Steps2_to_8.md
 DLA_LAB1/Exercise3/README_EDA_Exercise3.md
+
+# Exercise 3 local development utilities
+DLA_LAB1/Exercise3/checks/
+DLA_LAB1/Exercise3/checkpoints/
+DLA_LAB1/Exercise3/run_baseline_pipeline.py
