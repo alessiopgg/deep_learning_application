@@ -120,6 +120,16 @@ def parse_arguments():
     )
 
     finetune_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help=(
+            "Override the default model batch size. "
+            "Defaults: resnet18=32, resnet50=16."
+        ),
+    )
+
+    finetune_parser.add_argument(
         "--wandb",
         action="store_true",
         help=(
@@ -175,6 +185,7 @@ def main():
             num_epochs=args.epochs,
             strategy=args.strategy,
             classifier_type=args.classifier,
+            batch_size=args.batch_size,
             use_wandb=args.wandb,
         )
 

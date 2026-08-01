@@ -92,6 +92,7 @@ def create_dataloaders(
         model_name,
         validation_size=VALIDATION_SIZE,
         seed=SEED,
+        batch_size=None,
 ):
     """
     Create stratified training/validation splits and the test DataLoader.
@@ -104,8 +105,13 @@ def create_dataloaders(
 
     config = MODEL_CONFIGS[model_name]
     transform = config["weights"].transforms()
-    batch_size = config["batch_size"]
+    if batch_size is None:
+        batch_size = config["batch_size"]
 
+    if batch_size <= 0:
+        raise ValueError(
+            "batch_size must be greater than zero."
+        )
     train_dataset, test_dataset = load_gtsrb(
         DATA_DIR,
         transform=transform,
@@ -1010,6 +1016,7 @@ def create_wandb_run(config, run_id, use_wandb):
             config["model"],
             config["strategy"],
             config["classifier_type"],
+            f"batch-size-{config['batch_size']}",
         ],
         config=config,
     )
@@ -1129,12 +1136,24 @@ def run_fine_tuning(
         num_epochs=NUM_EPOCHS,
         strategy=DEFAULT_FINE_TUNING_STRATEGY,
         classifier_type=DEFAULT_CLASSIFIER_TYPE,
+        batch_size=None,
         seed=SEED,
         use_wandb=False,
 ):
     """Run, save and optionally track one Exercise 1.3 experiment."""
     if model_name not in MODEL_CONFIGS:
         raise ValueError(f"Unknown model: {model_name}")
+
+    effective_batch_size = (
+        MODEL_CONFIGS[model_name]["batch_size"]
+        if batch_size is None
+        else batch_size
+    )
+
+    if effective_batch_size <= 0:
+        raise ValueError(
+            "batch_size must be greater than zero."
+        )
 
     if num_epochs <= 0:
         raise ValueError(
@@ -1161,9 +1180,9 @@ def run_fine_tuning(
     )
     run_id = (
         f"{timestamp_for_id}_{model_name}_"
-        f"{strategy}_{classifier_type}"
+        f"{strategy}_{classifier_type}_"
+        f"bs{effective_batch_size}"
     )
-
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(
         parents=True,
@@ -1180,6 +1199,7 @@ def run_fine_tuning(
         model_name=model_name,
         validation_size=VALIDATION_SIZE,
         seed=seed,
+        batch_size=effective_batch_size,
     )
 
     model, model_info = create_fine_tuning_model(
