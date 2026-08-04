@@ -68,6 +68,8 @@ def build_training_arguments(
         eval_batch_size: int = DEFAULT_EVAL_BATCH_SIZE,
         weight_decay: float = DEFAULT_WEIGHT_DECAY,
         seed: int = DEFAULT_SEED,
+        use_wandb: bool = False,
+        run_name: str | None = None,
 ) -> TrainingArguments:
     """Create the initial full-fine-tuning configuration."""
     return TrainingArguments(
@@ -85,7 +87,8 @@ def build_training_arguments(
         metric_for_best_model="macro_f1",
         greater_is_better=True,
         save_total_limit=2,
-        report_to="none",
+        report_to="wandb" if use_wandb else "none",
+        run_name=run_name,
         fp16=torch.cuda.is_available(),
         dataloader_num_workers=0,
         seed=seed,
@@ -123,6 +126,8 @@ def run_full_fine_tuning(
         eval_batch_size: int = DEFAULT_EVAL_BATCH_SIZE,
         weight_decay: float = DEFAULT_WEIGHT_DECAY,
         seed: int = DEFAULT_SEED,
+        use_wandb: bool = False,
+        run_name: str | None = None,
 ) -> None:
     """Fine-tune all DistilBERT parameters and evaluate on validation."""
     checkpoint_dir = output_dir / "checkpoints"
@@ -145,7 +150,12 @@ def run_full_fine_tuning(
         eval_batch_size=eval_batch_size,
         weight_decay=weight_decay,
         seed=seed,
+        use_wandb=use_wandb,
+        run_name=run_name,
     )
+
+    print(f"Weights & Biases enabled: {use_wandb}")
+    print(f"W&B run name: {run_name}")
 
     trainer = build_trainer(
         model=model,

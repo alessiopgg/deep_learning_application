@@ -76,6 +76,8 @@ def run_training_command(args: argparse.Namespace) -> None:
         eval_batch_size=args.eval_batch_size,
         weight_decay=args.weight_decay,
         seed=args.seed,
+        use_wandb=args.wandb,
+        run_name=args.run_name,
     )
 
 
@@ -166,6 +168,18 @@ def parse_arguments() -> argparse.Namespace:
         default=DEFAULT_SEED,
     )
     test_parser.set_defaults(handler=run_test_command)
+
+    training_parser.add_argument(
+        "--wandb",
+        action="store_true",
+        help="Log training and validation metrics to Weights & Biases.",
+    )
+
+    training_parser.add_argument(
+        "--run-name",
+        default=None,
+        help="Optional Weights & Biases run name.",
+    )
 
     return parser.parse_args()
 
