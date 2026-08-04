@@ -310,7 +310,7 @@ The downstream model is a Scikit-learn pipeline:
 StandardScaler
 → LinearSVC
 ```
-
+Come verifica esplorativa, le stesse feature DistilBERT sono state utilizzate anche con Linear Discriminant Analysis e regressione logistica. LDA ha ottenuto un’accuracy di validation pari a 0,813321, mentre la regressione logistica, con C=1 e solver lbfgs, ha raggiunto accuracy 0,814259 e macro-F1 0,814180. Entrambe le alternative sono risultate leggermente inferiori alla pipeline StandardScaler + LinearSVC con C=0.01, che ha ottenuto accuracy 0,820826 e macro-F1 0,820742. Per mantenere la soluzione finale semplice e coerente con la consegna, i classificatori esplorativi non sono stati inclusi nel codice definitivo.
 ## Standardization without leakage
 
 The pipeline is fitted only with training features:

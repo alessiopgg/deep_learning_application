@@ -4,6 +4,9 @@ from pathlib import Path
 from baseline_classifier import (
     DEFAULT_LINEAR_SVC_C_VALUES,
     DEFAULT_LINEAR_SVC_MAX_ITER,
+    DEFAULT_LOGISTIC_REGRESSION_C,
+    DEFAULT_LOGISTIC_REGRESSION_MAX_ITER,
+    run_logistic_regression_validation_experiment,
     run_selected_baseline_test_evaluation,
     run_validation_model_selection,
 )
@@ -88,6 +91,18 @@ def run_model_selection_command(args: argparse.Namespace) -> None:
     )
 
 
+
+def run_logistic_regression_validation_command(
+    args: argparse.Namespace,
+) -> None:
+    run_logistic_regression_validation_experiment(
+        output_dir=EXERCISE_1_3_OUTPUT_DIR,
+        c_value=args.c,
+        max_iter=args.max_iter,
+        overwrite=args.overwrite,
+    )
+
+
 def run_test_evaluation_command(args: argparse.Namespace) -> None:
     run_selected_baseline_test_evaluation(
         output_dir=EXERCISE_1_3_OUTPUT_DIR,
@@ -150,6 +165,29 @@ def parse_arguments() -> argparse.Namespace:
     )
     selection_parser.add_argument("--overwrite", action="store_true")
     selection_parser.set_defaults(handler=run_model_selection_command)
+
+
+    logistic_parser = subparsers.add_parser(
+        "evaluate-logistic",
+        help=(
+            "Train StandardScaler + LogisticRegression on cached "
+            "train features and evaluate validation only."
+        ),
+    )
+    logistic_parser.add_argument(
+        "--c",
+        type=float,
+        default=DEFAULT_LOGISTIC_REGRESSION_C,
+    )
+    logistic_parser.add_argument(
+        "--max-iter",
+        type=int,
+        default=DEFAULT_LOGISTIC_REGRESSION_MAX_ITER,
+    )
+    logistic_parser.add_argument("--overwrite", action="store_true")
+    logistic_parser.set_defaults(
+        handler=run_logistic_regression_validation_command
+    )
 
     test_parser = subparsers.add_parser(
         "evaluate-test",

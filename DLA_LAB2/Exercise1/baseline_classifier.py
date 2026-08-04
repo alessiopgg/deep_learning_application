@@ -5,6 +5,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
@@ -21,6 +22,8 @@ CLASS_IDS = (0, 1)
 CLASS_NAMES = ("neg", "pos")
 DEFAULT_LINEAR_SVC_C_VALUES = (0.01, 0.1, 1.0, 10.0)
 DEFAULT_LINEAR_SVC_MAX_ITER = 10_000
+DEFAULT_LOGISTIC_REGRESSION_C = 1.0
+DEFAULT_LOGISTIC_REGRESSION_MAX_ITER = 1_000
 
 
 def load_feature_archive(
@@ -58,6 +61,33 @@ def build_pipeline(c_value: float, max_iter: int) -> Pipeline:
                     C=c_value,
                     max_iter=max_iter,
                     dual=False,
+                    random_state=SEED,
+                ),
+            ),
+        ]
+    )
+
+
+
+def build_logistic_regression_pipeline(
+    c_value: float = DEFAULT_LOGISTIC_REGRESSION_C,
+    max_iter: int = DEFAULT_LOGISTIC_REGRESSION_MAX_ITER,
+) -> Pipeline:
+    """Build a StandardScaler + LogisticRegression pipeline."""
+    if c_value <= 0:
+        raise ValueError("LogisticRegression C must be greater than zero.")
+    if max_iter <= 0:
+        raise ValueError("max_iter must be greater than zero.")
+
+    return Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            (
+                "classifier",
+                LogisticRegression(
+                    C=c_value,
+                    max_iter=max_iter,
+                    solver="lbfgs",
                     random_state=SEED,
                 ),
             ),
@@ -254,6 +284,127 @@ def run_validation_model_selection(
     print(f"Pipeline saved in: {selected_model_path}")
 
     return selected
+
+
+
+def run_logistic_regression_validation_experiment(
+    output_dir: Path,
+    c_value: float = DEFAULT_LOGISTIC_REGRESSION_C,
+    max_iter: int = DEFAULT_LOGISTIC_REGRESSION_MAX_ITER,
+    overwrite: bool = False,
+) -> dict:
+    """Train Logistic Regression on train features and evaluate validation."""
+    output_dir = Path(output_dir)
+    features_dir = output_dir / "features"
+    results_dir = output_dir / "results"
+    models_dir = output_dir / "models"
+    predictions_dir = output_dir / "predictions"
+
+    metrics_path = (
+        results_dir / "logistic_regression_validation_metrics.json"
+    )
+    report_path = (
+        results_dir
+        / "logistic_regression_validation_classification_report.json"
+    )
+    model_path = models_dir / "logistic_regression_pipeline.joblib"
+    predictions_path = (
+        predictions_dir
+        / "logistic_regression_validation_predictions.npz"
+    )
+
+    ensure_outputs_can_be_written(
+        [metrics_path, report_path, model_path, predictions_path],
+        overwrite,
+    )
+
+    train_features, train_labels, _ = load_feature_archive(
+        features_dir / "train_features.npz"
+    )
+    validation_features, validation_labels, validation_indices = (
+        load_feature_archive(features_dir / "validation_features.npz")
+    )
+
+    if train_features.shape[1] != validation_features.shape[1]:
+        raise ValueError("Train and validation feature dimensions differ.")
+
+    pipeline = build_logistic_regression_pipeline(
+        c_value=c_value,
+        max_iter=max_iter,
+    )
+
+    print(
+        "\n=== Exercise 1.3: Logistic Regression "
+        "validation experiment ==="
+    )
+    print(f"Train features: {train_features.shape}")
+    print(f"Validation features: {validation_features.shape}")
+    print("Pipeline: StandardScaler + LogisticRegression")
+    print("Solver: lbfgs")
+    print(f"C: {c_value}")
+    print(f"Maximum iterations: {max_iter}")
+    print("Test split loaded: False")
+
+    fit_start = time.perf_counter()
+    pipeline.fit(train_features, train_labels)
+    fit_seconds = time.perf_counter() - fit_start
+
+    metrics, predictions, scores, report = evaluate_pipeline(
+        pipeline,
+        validation_features,
+        validation_labels,
+    )
+
+    classifier = pipeline.named_steps["classifier"]
+
+    result = {
+        "split": "validation",
+        "classifier": "LogisticRegression",
+        "preprocessing": "StandardScaler",
+        "solver": "lbfgs",
+        "c": float(c_value),
+        "max_iter": int(max_iter),
+        "iterations": int(classifier.n_iter_[0]),
+        "train_examples": int(train_features.shape[0]),
+        "validation_examples": int(validation_features.shape[0]),
+        "feature_dimension": int(train_features.shape[1]),
+        "accuracy": metrics["accuracy"],
+        "macro_f1": metrics["macro_f1"],
+        "fit_seconds": float(fit_seconds),
+        "prediction_seconds": metrics["prediction_seconds"],
+        "confusion_matrix": metrics["confusion_matrix"],
+        "test_split_loaded": False,
+    }
+
+    save_json(result, metrics_path)
+    save_json(report, report_path)
+    models_dir.mkdir(parents=True, exist_ok=True)
+    predictions_dir.mkdir(parents=True, exist_ok=True)
+    joblib.dump(pipeline, model_path)
+    np.savez_compressed(
+        predictions_path,
+        indices=validation_indices,
+        labels=validation_labels,
+        predictions=predictions.astype(np.int64),
+        decision_scores=np.asarray(scores, dtype=np.float64),
+    )
+
+    print("\n=== Logistic Regression validation results ===")
+    print(f"Accuracy: {result['accuracy']:.6f}")
+    print(f"Macro-F1: {result['macro_f1']:.6f}")
+    print(f"Fit time: {result['fit_seconds']:.3f} seconds")
+    print(
+        "Prediction time: "
+        f"{result['prediction_seconds']:.3f} seconds"
+    )
+    print(
+        f"Iterations: {result['iterations']}/{result['max_iter']}"
+    )
+    print(f"Confusion matrix: {result['confusion_matrix']}")
+    print(f"Metrics saved in: {metrics_path}")
+    print("The test split was not loaded or evaluated.")
+
+    return result
 
 
 def run_selected_baseline_test_evaluation(
