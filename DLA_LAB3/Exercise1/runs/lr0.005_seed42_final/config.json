@@ -1,0 +1,12 @@
+{
+    "run_name": "lr0.005_seed42_final",
+    "seed": 42,
+    "num_episodes": 1000,
+    "gamma": 0.99,
+    "optimizer": "Adam",
+    "learning_rate": 0.005,
+    "eval_every": 25,
+    "eval_episodes": 20,
+    "hidden_dim": 64,
+    "activation": "ReLU"
+}
