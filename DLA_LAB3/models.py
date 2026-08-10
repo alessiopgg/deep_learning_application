@@ -19,3 +19,21 @@ class PolicyNetwork(nn.Module):
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
         return self.network(state)
+
+
+class ValueNetwork(nn.Module):
+    def __init__(
+        self,
+        state_dim: int = 4,
+        hidden_dim: int = 64,
+    ):
+        super().__init__()
+
+        self.network = nn.Sequential(
+            nn.Linear(state_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+        )
+
+    def forward(self, state: torch.Tensor) -> torch.Tensor:
+        return self.network(state).squeeze(-1)
