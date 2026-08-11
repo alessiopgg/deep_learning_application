@@ -1,0 +1,9 @@
+checkpoint_id,environment,checkpoint_role,selected,training_episodes,learning_rate,loss,mean_reward,std_reward,median_reward,min_reward,max_reward,mean_episode_length,positive_count,positive_percentage,reward_ge_100_count,reward_ge_100_percentage,reward_ge_200_count,reward_ge_200_percentage
+cartpole_mse_lr0.001_final,CartPole-v1,final,False,250,0.001,MSE,230.94,35.6852406465194,219.0,180.0,386.0,230.94,100,100.0,100,100.0,87,87.0
+cartpole_mse_lr0.0005_best,CartPole-v1,best_training_evaluation,True,250,0.0005,MSE,280.84,75.87855032879845,258.5,185.0,500.0,280.84,100,100.0,100,100.0,95,95.0
+cartpole_mse_lr0.0005_final,CartPole-v1,final,False,250,0.0005,MSE,238.68,53.849768801732104,216.5,174.0,461.0,238.68,100,100.0,100,100.0,78,78.0
+cartpole_huber_lr0.0005_best,CartPole-v1,best_training_evaluation,False,250,0.0005,huber,169.6,52.17202315417718,152.0,108.0,346.0,169.6,100,100.0,100,100.0,21,21.0
+cartpole_huber_lr0.0005_final,CartPole-v1,final,False,250,0.0005,huber,187.99,48.15692992706242,172.5,126.0,368.0,187.99,100,100.0,100,100.0,28,28.0
+lunarlander_500_final,LunarLander-v3,final,False,500,0.0005,mse,93.91360123777133,135.18755889224255,137.55411589655097,-319.45592291910066,272.80596609580823,666.34,79,79.0,74,74.0,14,14.0
+lunarlander_1000_best,LunarLander-v3,best_training_evaluation,False,1000,0.0005,mse,31.03473892829596,254.19100391427764,132.00491188710993,-807.3036079139288,305.01191077546173,357.29,61,61.0,55,55.0,33,33.0
+lunarlander_1000_final,LunarLander-v3,final,True,1000,0.0005,mse,172.67615645423254,70.02208678124656,184.82135498096176,-101.20941626599688,282.86559266898416,622.18,96,96.0,84,84.0,32,32.0

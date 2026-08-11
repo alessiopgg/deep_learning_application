@@ -1,0 +1,22 @@
+{
+    "run_name": "lunarlander_dqn_final_1000ep_seed42",
+    "environment": "LunarLander-v3",
+    "seed": 42,
+    "num_episodes": 1000,
+    "gamma": 0.99,
+    "learning_rate": 0.0005,
+    "optimizer": "Adam",
+    "hidden_dim": 64,
+    "loss": "mse",
+    "buffer_capacity": 50000,
+    "batch_size": 64,
+    "min_buffer_size": 1000,
+    "epsilon_start": 1.0,
+    "epsilon_end": 0.05,
+    "epsilon_decay_steps": 50000,
+    "target_sync_every": 500,
+    "eval_every": 25,
+    "eval_episodes": 10,
+    "target_update": "hard",
+    "checkpoint_selection": "best_evaluation_average_reward"
+}
