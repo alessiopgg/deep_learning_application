@@ -23,7 +23,7 @@ GAMMA = 0.99
 LEARNING_RATE = 5e-4
 HIDDEN_DIM = 64
 
-LOSS_TYPE = "huber"
+LOSS_TYPE = "mse"
 
 BUFFER_CAPACITY = 10_000
 BATCH_SIZE = 64
@@ -38,7 +38,7 @@ TARGET_SYNC_EVERY = 250
 EVAL_EVERY = 10
 EVAL_EPISODES = 10
 
-RUN_NAME = "cartpole_dqn_huber_lr0.0005_seed42"
+RUN_NAME = "cartpole_dqn_final_mse_lr0.0005_seed42"
 
 
 def get_output_dir():
