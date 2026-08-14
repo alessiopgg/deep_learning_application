@@ -1,3 +1,4 @@
+import argparse
 import csv
 import json
 from pathlib import Path
@@ -5,24 +6,134 @@ from pathlib import Path
 import gymnasium as gym
 import torch
 
-from models import PolicyNetwork, ValueNetwork
-from Exercise2.reinforce_ex2 import train_with_value_baseline
+from models import (
+    PolicyNetwork,
+    ValueNetwork,
+)
+
+from Exercise2.reinforce_ex2 import (
+    train_with_value_baseline,
+)
 
 
-SEED = 42
+DEFAULT_SEED = 42
 
-NUM_EPISODES = 1000
-GAMMA = 0.99
+DEFAULT_NUM_EPISODES = 2000
+DEFAULT_GAMMA = 0.99
 
-POLICY_LEARNING_RATE = 0.005
-VALUE_LEARNING_RATE = 0.005
+DEFAULT_POLICY_LEARNING_RATE = 0.001
+DEFAULT_VALUE_LEARNING_RATE = 0.001
 
-HIDDEN_DIM = 64
+DEFAULT_HIDDEN_DIM = 64
 
-EVAL_EVERY = 25
-EVAL_EPISODES = 20
+DEFAULT_EVAL_EVERY = 25
+DEFAULT_EVAL_EPISODES = 20
 
-RUN_NAME = "value_baseline_seed42"
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Train REINFORCE with a learned "
+            "value baseline on CartPole-v1"
+        )
+    )
+
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=DEFAULT_SEED,
+        help=f"Random seed (default: {DEFAULT_SEED})",
+    )
+
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        default=DEFAULT_NUM_EPISODES,
+        help=(
+            f"Number of training episodes "
+            f"(default: {DEFAULT_NUM_EPISODES})"
+        ),
+    )
+
+    parser.add_argument(
+        "--gamma",
+        type=float,
+        default=DEFAULT_GAMMA,
+        help=f"Discount factor (default: {DEFAULT_GAMMA})",
+    )
+
+    parser.add_argument(
+        "--policy-lr",
+        type=float,
+        default=DEFAULT_POLICY_LEARNING_RATE,
+        help=(
+            f"Policy learning rate "
+            f"(default: {DEFAULT_POLICY_LEARNING_RATE})"
+        ),
+    )
+
+    parser.add_argument(
+        "--value-lr",
+        type=float,
+        default=DEFAULT_VALUE_LEARNING_RATE,
+        help=(
+            f"Value-network learning rate "
+            f"(default: {DEFAULT_VALUE_LEARNING_RATE})"
+        ),
+    )
+
+    parser.add_argument(
+        "--hidden-dim",
+        type=int,
+        default=DEFAULT_HIDDEN_DIM,
+        help=(
+            f"Hidden layer size "
+            f"(default: {DEFAULT_HIDDEN_DIM})"
+        ),
+    )
+
+    parser.add_argument(
+        "--eval-every",
+        type=int,
+        default=DEFAULT_EVAL_EVERY,
+        help=(
+            f"Evaluate every N training episodes "
+            f"(default: {DEFAULT_EVAL_EVERY})"
+        ),
+    )
+
+    parser.add_argument(
+        "--eval-episodes",
+        type=int,
+        default=DEFAULT_EVAL_EPISODES,
+        help=(
+            f"Number of evaluation episodes "
+            f"(default: {DEFAULT_EVAL_EPISODES})"
+        ),
+    )
+
+    parser.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Optional custom name for the run",
+    )
+
+    return parser.parse_args()
+
+
+def build_run_name(args):
+    if args.run_name is not None:
+        return args.run_name
+
+    return (
+        f"reinforce_value_baseline"
+        f"_plr{args.policy_lr:g}"
+        f"_vlr{args.value_lr:g}"
+        f"_gamma{args.gamma:g}"
+        f"_h{args.hidden_dim}"
+        f"_seed{args.seed}"
+    )
 
 
 def save_results(
@@ -32,40 +143,56 @@ def save_results(
     evaluation_history,
     policy,
     value_network,
+    best_checkpoint,
+    args,
+    run_name,
 ):
     output_dir = (
         Path(__file__).parent
         / "runs"
-        / RUN_NAME
+        / run_name
     )
+
     output_dir.mkdir(
         parents=True,
         exist_ok=True,
     )
 
     config = {
-        "run_name": RUN_NAME,
-        "seed": SEED,
-        "num_episodes": NUM_EPISODES,
-        "gamma": GAMMA,
+        "run_name": run_name,
+        "method": "value_baseline",
+        "seed": args.seed,
+        "num_episodes": args.episodes,
+        "gamma": args.gamma,
 
-        "policy_architecture": "4-64-2",
+        "policy_architecture": (
+            f"4-{args.hidden_dim}-2"
+        ),
         "policy_activation": "ReLU",
         "policy_optimizer": "Adam",
-        "policy_learning_rate": POLICY_LEARNING_RATE,
+        "policy_learning_rate": args.policy_lr,
 
-        "value_architecture": "4-64-1",
+        "value_architecture": (
+            f"4-{args.hidden_dim}-1"
+        ),
         "value_activation": "ReLU",
         "value_optimizer": "Adam",
-        "value_learning_rate": VALUE_LEARNING_RATE,
+        "value_learning_rate": args.value_lr,
 
-        "hidden_dim": HIDDEN_DIM,
+        "hidden_dim": args.hidden_dim,
 
-        "eval_every": EVAL_EVERY,
-        "eval_episodes": EVAL_EPISODES,
+        "eval_every": args.eval_every,
+        "eval_episodes": args.eval_episodes,
 
         "standardize_returns": False,
         "value_baseline": True,
+
+        "best_evaluation_episode": (
+            best_checkpoint["episode"]
+        ),
+        "best_evaluation_reward": (
+            best_checkpoint["average_reward"]
+        ),
     }
 
     with open(
@@ -139,6 +266,7 @@ def save_results(
                 ]
             )
 
+    # Final checkpoints
     torch.save(
         policy.state_dict(),
         output_dir / "policy.pt",
@@ -149,9 +277,31 @@ def save_results(
         output_dir / "value.pt",
     )
 
+    # Best checkpoints selected according to
+    # policy evaluation reward.
+    torch.save(
+        best_checkpoint["policy_state_dict"],
+        output_dir / "best_policy.pt",
+    )
+
+    torch.save(
+        best_checkpoint["value_state_dict"],
+        output_dir / "best_value.pt",
+    )
+
 
 def main():
-    torch.manual_seed(SEED)
+    args = parse_args()
+
+    if args.eval_every > args.episodes:
+        raise ValueError(
+            "--eval-every must be less than or equal "
+            "to --episodes."
+        )
+
+    run_name = build_run_name(args)
+
+    torch.manual_seed(args.seed)
 
     train_env = gym.make(
         "CartPole-v1"
@@ -162,26 +312,30 @@ def main():
     )
 
     train_env.reset(
-        seed=SEED,
+        seed=args.seed
     )
 
     eval_env.reset(
-        seed=SEED + 1,
+        seed=args.seed + 1
     )
 
+    # Initialize the policy exactly as in the other
+    # Exercise 2 configurations.
     policy = PolicyNetwork(
-        hidden_dim=HIDDEN_DIM,
+        hidden_dim=args.hidden_dim,
     )
 
-    # Preserve the RNG state that the previous
-    # experiments had immediately after policy
-    # initialization.
+    # Save the RNG state immediately after policy
+    # initialization. Initializing the ValueNetwork
+    # consumes random numbers, but we do not want this
+    # extra network to change the subsequent action
+    # sampling sequence simply because it exists.
     training_rng_state = (
         torch.random.get_rng_state()
     )
 
     value_network = ValueNetwork(
-        hidden_dim=HIDDEN_DIM,
+        hidden_dim=args.hidden_dim,
     )
 
     torch.random.set_rng_state(
@@ -190,19 +344,34 @@ def main():
 
     policy_optimizer = torch.optim.Adam(
         policy.parameters(),
-        lr=POLICY_LEARNING_RATE,
+        lr=args.policy_lr,
     )
 
     value_optimizer = torch.optim.Adam(
         value_network.parameters(),
-        lr=VALUE_LEARNING_RATE,
+        lr=args.value_lr,
     )
+
+    print("Run:", run_name)
+    print("Method: value_baseline")
+    print("Seed:", args.seed)
+    print("Policy learning rate:", args.policy_lr)
+    print("Value learning rate:", args.value_lr)
+    print("Gamma:", args.gamma)
+    print("Hidden dimension:", args.hidden_dim)
+    print("Training episodes:", args.episodes)
+    print(
+        f"Evaluation: every {args.eval_every} episodes "
+        f"for {args.eval_episodes} episodes"
+    )
+    print()
 
     (
         episode_rewards,
         policy_losses,
         value_losses,
         evaluation_history,
+        best_checkpoint,
     ) = train_with_value_baseline(
         env=train_env,
         eval_env=eval_env,
@@ -210,10 +379,10 @@ def main():
         value_network=value_network,
         policy_optimizer=policy_optimizer,
         value_optimizer=value_optimizer,
-        num_episodes=NUM_EPISODES,
-        gamma=GAMMA,
-        eval_every=EVAL_EVERY,
-        eval_episodes=EVAL_EPISODES,
+        num_episodes=args.episodes,
+        gamma=args.gamma,
+        eval_every=args.eval_every,
+        eval_episodes=args.eval_episodes,
     )
 
     train_env.close()
@@ -226,9 +395,14 @@ def main():
         evaluation_history=evaluation_history,
         policy=policy,
         value_network=value_network,
+        best_checkpoint=best_checkpoint,
+        args=args,
+        run_name=run_name,
     )
 
-    print("\nValue-baseline training completed")
+    print()
+    print("Value-baseline training completed")
+    print("Run:", run_name)
     print(
         "Training episodes:",
         len(episode_rewards),
@@ -236,6 +410,11 @@ def main():
     print(
         "Evaluations:",
         len(evaluation_history),
+    )
+    print(
+        "Best evaluation:",
+        f"{best_checkpoint['average_reward']:.2f}",
+        f"at episode {best_checkpoint['episode']}",
     )
 
 

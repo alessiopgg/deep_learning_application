@@ -1,12 +1,13 @@
+import copy
+
 import torch
 import torch.nn.functional as F
+from torch.distributions import Categorical
 
 from reinforce import (
     compute_discounted_returns,
     evaluate_policy,
 )
-
-from torch.distributions import Categorical
 
 
 def collect_episode(env, policy):
@@ -31,9 +32,13 @@ def collect_episode(env, policy):
         action = distribution.sample()
         log_prob = distribution.log_prob(action)
 
-        observation, reward, terminated, truncated, info = env.step(
-            action.item()
-        )
+        (
+            observation,
+            reward,
+            terminated,
+            truncated,
+            info,
+        ) = env.step(action.item())
 
         states.append(state)
         log_probs.append(log_prob)
@@ -46,6 +51,7 @@ def collect_episode(env, policy):
         terminated,
         truncated,
     )
+
 
 def standardize_returns(
     returns: torch.Tensor,
@@ -76,15 +82,15 @@ def update_policy(
             returns_tensor,
         )
 
-    loss = -(
+    policy_loss = -(
         log_probs_tensor * returns_tensor
     ).sum()
 
     optimizer.zero_grad()
-    loss.backward()
+    policy_loss.backward()
     optimizer.step()
 
-    return loss.item()
+    return policy_loss.item()
 
 
 def update_policy_and_value(
@@ -104,14 +110,23 @@ def update_policy_and_value(
         gamma,
     )
 
+    # V_w(S_t)
     values = value_network(states_tensor)
 
+    # Advantage:
+    # A_t = G_t - V_w(S_t)
+    #
+    # detach() is essential here:
+    # the policy loss must update only the policy,
+    # not the ValueNetwork.
     advantages = returns_tensor - values.detach()
 
     policy_loss = -(
         log_probs_tensor * advantages
     ).sum()
 
+    # The ValueNetwork learns to approximate
+    # the Monte Carlo return G_t.
     value_loss = F.mse_loss(
         values,
         returns_tensor,
@@ -130,6 +145,7 @@ def update_policy_and_value(
         value_loss.item(),
     )
 
+
 def train(
     env,
     eval_env,
@@ -142,16 +158,26 @@ def train(
     standardize,
 ):
     episode_rewards = []
-    losses = []
+    policy_losses = []
     evaluation_history = []
 
+    best_reward = float("-inf")
+    best_episode = None
+    best_policy_state = None
+
     for episode in range(1, num_episodes + 1):
-        states, log_probs, rewards, _, _ = collect_episode(
+        (
+            _,
+            log_probs,
+            rewards,
+            _,
+            _,
+        ) = collect_episode(
             env,
             policy,
         )
 
-        loss = update_policy(
+        policy_loss = update_policy(
             log_probs=log_probs,
             rewards=rewards,
             optimizer=optimizer,
@@ -162,10 +188,13 @@ def train(
         total_reward = sum(rewards)
 
         episode_rewards.append(total_reward)
-        losses.append(loss)
+        policy_losses.append(policy_loss)
 
         if episode % eval_every == 0:
-            average_reward, average_length = evaluate_policy(
+            (
+                average_reward,
+                average_length,
+            ) = evaluate_policy(
                 env=eval_env,
                 policy=policy,
                 num_episodes=eval_episodes,
@@ -179,13 +208,38 @@ def train(
                 }
             )
 
+            if average_reward > best_reward:
+                best_reward = average_reward
+                best_episode = episode
+                best_policy_state = copy.deepcopy(
+                    policy.state_dict()
+                )
+
             print(
                 f"Episode {episode}/{num_episodes} "
                 f"- eval reward: {average_reward:.2f} "
                 f"- eval length: {average_length:.2f}"
             )
 
-    return episode_rewards, losses, evaluation_history
+    if best_policy_state is None:
+        raise RuntimeError(
+            "No evaluation was performed during training. "
+            "Use eval_every <= num_episodes."
+        )
+
+    best_checkpoint = {
+        "state_dict": best_policy_state,
+        "episode": best_episode,
+        "average_reward": best_reward,
+    }
+
+    return (
+        episode_rewards,
+        policy_losses,
+        evaluation_history,
+        best_checkpoint,
+    )
+
 
 def train_with_value_baseline(
     env,
@@ -204,13 +258,27 @@ def train_with_value_baseline(
     value_losses = []
     evaluation_history = []
 
+    best_reward = float("-inf")
+    best_episode = None
+    best_policy_state = None
+    best_value_state = None
+
     for episode in range(1, num_episodes + 1):
-        states, log_probs, rewards, _, _ = collect_episode(
+        (
+            states,
+            log_probs,
+            rewards,
+            _,
+            _,
+        ) = collect_episode(
             env,
             policy,
         )
 
-        policy_loss, value_loss = update_policy_and_value(
+        (
+            policy_loss,
+            value_loss,
+        ) = update_policy_and_value(
             states=states,
             log_probs=log_probs,
             rewards=rewards,
@@ -227,7 +295,10 @@ def train_with_value_baseline(
         value_losses.append(value_loss)
 
         if episode % eval_every == 0:
-            average_reward, average_length = evaluate_policy(
+            (
+                average_reward,
+                average_length,
+            ) = evaluate_policy(
                 env=eval_env,
                 policy=policy,
                 num_episodes=eval_episodes,
@@ -241,6 +312,20 @@ def train_with_value_baseline(
                 }
             )
 
+            # The best checkpoint is selected according
+            # to policy performance, not value loss.
+            if average_reward > best_reward:
+                best_reward = average_reward
+                best_episode = episode
+
+                best_policy_state = copy.deepcopy(
+                    policy.state_dict()
+                )
+
+                best_value_state = copy.deepcopy(
+                    value_network.state_dict()
+                )
+
             print(
                 f"Episode {episode}/{num_episodes} "
                 f"- eval reward: {average_reward:.2f} "
@@ -248,9 +333,26 @@ def train_with_value_baseline(
                 f"- value loss: {value_loss:.4f}"
             )
 
+    if (
+        best_policy_state is None
+        or best_value_state is None
+    ):
+        raise RuntimeError(
+            "No evaluation was performed during training. "
+            "Use eval_every <= num_episodes."
+        )
+
+    best_checkpoint = {
+        "policy_state_dict": best_policy_state,
+        "value_state_dict": best_value_state,
+        "episode": best_episode,
+        "average_reward": best_reward,
+    }
+
     return (
         episode_rewards,
         policy_losses,
         value_losses,
         evaluation_history,
+        best_checkpoint,
     )

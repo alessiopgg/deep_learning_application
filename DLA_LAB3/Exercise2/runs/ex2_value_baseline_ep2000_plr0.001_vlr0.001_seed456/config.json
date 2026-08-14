@@ -1,0 +1,22 @@
+{
+    "run_name": "ex2_value_baseline_ep2000_plr0.001_vlr0.001_seed456",
+    "method": "value_baseline",
+    "seed": 456,
+    "num_episodes": 2000,
+    "gamma": 0.99,
+    "policy_architecture": "4-64-2",
+    "policy_activation": "ReLU",
+    "policy_optimizer": "Adam",
+    "policy_learning_rate": 0.001,
+    "value_architecture": "4-64-1",
+    "value_activation": "ReLU",
+    "value_optimizer": "Adam",
+    "value_learning_rate": 0.001,
+    "hidden_dim": 64,
+    "eval_every": 25,
+    "eval_episodes": 20,
+    "standardize_returns": false,
+    "value_baseline": true,
+    "best_evaluation_episode": 750,
+    "best_evaluation_reward": 500.0
+}
