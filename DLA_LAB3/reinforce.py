@@ -1,3 +1,5 @@
+import copy
+
 import torch
 from torch.distributions import Categorical
 
@@ -12,7 +14,10 @@ def collect_episode(env, policy):
     truncated = False
 
     while not (terminated or truncated):
-        state = torch.tensor(observation, dtype=torch.float32)
+        state = torch.tensor(
+            observation,
+            dtype=torch.float32,
+        )
 
         logits = policy(state)
         distribution = Categorical(logits=logits)
@@ -38,14 +43,28 @@ def compute_discounted_returns(rewards, gamma):
         G = reward + gamma * G
         returns.insert(0, G)
 
-    return torch.tensor(returns, dtype=torch.float32)
+    return torch.tensor(
+        returns,
+        dtype=torch.float32,
+    )
 
 
-def update_policy(log_probs, rewards, optimizer, gamma):
+def update_policy(
+    log_probs,
+    rewards,
+    optimizer,
+    gamma,
+):
     log_probs_tensor = torch.stack(log_probs)
-    returns_tensor = compute_discounted_returns(rewards, gamma)
 
-    loss = -(log_probs_tensor * returns_tensor).sum()
+    returns_tensor = compute_discounted_returns(
+        rewards,
+        gamma,
+    )
+
+    loss = -(
+        log_probs_tensor * returns_tensor
+    ).sum()
 
     optimizer.zero_grad()
     loss.backward()
@@ -67,6 +86,10 @@ def train(
     episode_rewards = []
     losses = []
     evaluation_history = []
+
+    best_reward = float("-inf")
+    best_episode = None
+    best_policy_state = None
 
     for episode in range(1, num_episodes + 1):
         log_probs, rewards, _, _ = collect_episode(
@@ -101,17 +124,45 @@ def train(
                 }
             )
 
+            if average_reward > best_reward:
+                best_reward = average_reward
+                best_episode = episode
+
+                best_policy_state = copy.deepcopy(
+                    policy.state_dict()
+                )
+
             print(
                 f"Episode {episode}/{num_episodes} "
                 f"- eval reward: {average_reward:.2f} "
                 f"- eval length: {average_length:.2f}"
             )
 
-    return episode_rewards, losses, evaluation_history
+    if best_policy_state is None:
+        raise RuntimeError(
+            "No evaluation was performed during training. "
+            "Use eval_every <= num_episodes."
+        )
+
+    best_checkpoint = {
+        "state_dict": best_policy_state,
+        "episode": best_episode,
+        "average_reward": best_reward,
+    }
+
+    return (
+        episode_rewards,
+        losses,
+        evaluation_history,
+        best_checkpoint,
+    )
 
 
-
-def evaluate_policy(env, policy, num_episodes):
+def evaluate_policy(
+    env,
+    policy,
+    num_episodes,
+):
     total_rewards = []
     episode_lengths = []
 
@@ -137,10 +188,20 @@ def evaluate_policy(env, policy, num_episodes):
                 )
 
                 logits = policy(state)
-                distribution = Categorical(logits=logits)
+
+                distribution = Categorical(
+                    logits=logits
+                )
+
                 action = distribution.sample()
 
-                observation, reward, terminated, truncated, info = env.step(
+                (
+                    observation,
+                    reward,
+                    terminated,
+                    truncated,
+                    info,
+                ) = env.step(
                     action.item()
                 )
 
@@ -155,7 +216,12 @@ def evaluate_policy(env, policy, num_episodes):
     if was_training:
         policy.train()
 
-    average_reward = sum(total_rewards) / num_episodes
-    average_length = sum(episode_lengths) / num_episodes
+    average_reward = (
+        sum(total_rewards) / num_episodes
+    )
+
+    average_length = (
+        sum(episode_lengths) / num_episodes
+    )
 
     return average_reward, average_length

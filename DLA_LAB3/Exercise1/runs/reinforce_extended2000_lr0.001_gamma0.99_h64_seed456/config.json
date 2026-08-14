@@ -1,0 +1,14 @@
+{
+    "run_name": "reinforce_extended2000_lr0.001_gamma0.99_h64_seed456",
+    "seed": 456,
+    "num_episodes": 2000,
+    "gamma": 0.99,
+    "optimizer": "Adam",
+    "learning_rate": 0.001,
+    "eval_every": 25,
+    "eval_episodes": 20,
+    "hidden_dim": 64,
+    "activation": "ReLU",
+    "best_evaluation_episode": 1150,
+    "best_evaluation_reward": 500.0
+}
