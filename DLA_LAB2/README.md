@@ -18,7 +18,6 @@ Il protocollo sperimentale mantiene separati training, validation e test, usa co
 DLA_LAB2/
 ├── README.md
 ├── environment.yml
-├── DLA-Lab2.ipynb
 │
 ├── Exercise1/
 │   ├── README.md
@@ -50,8 +49,6 @@ DLA_LAB2/
     ├── io_utils.py
     └── assets/
 ```
-
-Il notebook `DLA-Lab2.ipynb` contiene la consegna originale del laboratorio; il codice definitivo è organizzato nei tre esercizi e documentato nei rispettivi README.
 
 ## Esercizi
 
