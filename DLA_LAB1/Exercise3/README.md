@@ -732,20 +732,6 @@ La pipeline salva localmente:
 
 La matrice finale è stata tracciata anche con **Weights & Biases**.
 
-```text
-project: dla-lab1
-group: 20260731_160848_exercise-3-3-backbone-study
-```
-
-| Run | Nome | W&B ID |
-|---|---|---|
-| A | `coco-frozen` | `czjaa6cm` |
-| B | `gtsrb-frozen` | `fzriktoy` |
-| C | `gtsrb-layer4` | `7rauu5lc` |
-| D | `gtsrb-layer3-layer4` | `3kfi2wex` |
-
----
-
 ## Riproducibilità
 
 Il protocollo mantiene:
