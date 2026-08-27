@@ -17,6 +17,7 @@ Il protocollo sperimentale mantiene separati training, validation e test, usa co
 ```text
 DLA_LAB2/
 ├── README.md
+├── environment.yml
 ├── DLA-Lab2.ipynb
 │
 ├── Exercise1/
@@ -141,29 +142,37 @@ I risultati registrati sono:
 
 ## Ambiente e riproducibilità
 
-Gli esperimenti del Laboratorio 2 sono stati eseguiti nell'ambiente Conda locale:
-
-```bash
-conda activate DLA2026-transformers
-```
+L'ambiente Conda di riferimento è definito in [`environment.yml`](environment.yml).
 
 Dalla root del repository:
 
 ```bash
+conda env create -f DLA_LAB2/environment.yml
+conda activate DLA2026-transformers
 cd DLA_LAB2
 ```
 
-Tra le versioni effettivamente registrate negli artifact finali del laboratorio risultano:
+Versioni principali registrate nell'ambiente:
 
-* PyTorch 2.12.0 + CUDA 12.6;
-* Transformers 5.14.1;
-* NumPy 2.4.4.
+* Python 3.12.13
+* PyTorch 2.12.0 + CUDA 12.6
+* NumPy 2.4.4
+* Pandas 3.0.5
+* Matplotlib 3.11.1
+* Scikit-learn 1.9.0
+* Pillow 12.2.0
+* joblib 1.5.3
+* Hugging Face Datasets 5.0.1
+* Transformers 5.14.1
+* Accelerate 1.14.0
+* Weights & Biases 0.28.1
+* Gradio 6.22.0
 
-Il codice utilizza inoltre Hugging Face Datasets, Scikit-learn, Pandas, Matplotlib, Pillow e Gradio.
+L'hardware locale di riferimento è una **NVIDIA GeForce RTX 3050 Ti Laptop GPU**.
 
 Il seed di riferimento per le componenti supervisionate è `42`. Il retrieval CLIP è usato in modalità zero-shot e non introduce training sul dataset Flickr8k.
 
-Un file `environment.yml` dedicato al Lab 2 non è ancora versionato; prima dell'audit finale l'ambiente verrà consolidato distinguendo le versioni effettivamente verificate da eventuali dipendenze compatibili proposte.
+La riproducibilità è gestita attraverso split ufficiali, configurazioni esplicite, artifact persistenti e selezione del modello sulla validation. Non viene assunto determinismo bit-a-bit tra piattaforme GPU differenti.
 
 ## Entry point principali
 
@@ -231,49 +240,49 @@ python Exercise2/main.py evaluate-test
 
 ### Exercise 3
 
-La CLI unificata espone i comandi pubblici dell'applicazione.
+L'Exercise 3 usa import di package `Exercise3`, quindi dalla root `DLA_LAB2` viene avviato come modulo Python.
 
 Per consultare le opzioni:
 
 ```bash
-python Exercise3/main.py --help
+python -m Exercise3.main --help
 ```
 
 Ispezione di Flickr8k:
 
 ```bash
-python Exercise3/main.py inspect-dataset
+python -m Exercise3.main inspect-dataset
 ```
 
 Ispezione di CLIP:
 
 ```bash
-python Exercise3/main.py inspect-clip
+python -m Exercise3.main inspect-clip
 ```
 
 Costruzione dell'indice:
 
 ```bash
-python Exercise3/main.py build-index
+python -m Exercise3.main build-index
 ```
 
 Ricerca testuale:
 
 ```bash
-python Exercise3/main.py search \
+python -m Exercise3.main search \
   --query "a dog playing outside"
 ```
 
 Valutazione del retrieval:
 
 ```bash
-python Exercise3/main.py evaluate-retrieval
+python -m Exercise3.main evaluate-retrieval
 ```
 
 Avvio dell'applicazione Gradio:
 
 ```bash
-python Exercise3/main.py launch-app
+python -m Exercise3.main launch-app --inbrowser
 ```
 
 I dettagli relativi a dataset, indicizzazione, ranking, valutazione e interfaccia sono documentati nel README specifico dell'esercizio.
