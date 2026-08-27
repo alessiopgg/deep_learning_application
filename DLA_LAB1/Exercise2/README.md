@@ -1,28 +1,76 @@
-# Exercise 2 — Compact and Reproducible Training Pipeline
+# Exercise 2 — Pipeline configurabile e riproducibile
 
-Exercise 2 consolidates the GTSRB fine-tuning workflow from Exercise 1.3 into a configurable and reproducible pipeline. The scientific protocol is unchanged: GTSRB classification with pretrained ResNet-18/50, linear or MLP heads, the same fine-tuning strategies, Cross Entropy, AdamW, stratified train/validation splitting, and a separate final test evaluation.
+L'Exercise 2 consolida il fine-tuning sviluppato nell'Exercise 1.3 in una pipeline più **modulare, configurabile e riproducibile**.
 
-## Structure
+Il problema scientifico non cambia: classificazione GTSRB con ResNet pre-addestrate, testa lineare o MLP e strategie `classifier`, `last_block` e `full`. Il contributo dell'esercizio è soprattutto ingegneristico: separare configurazione, dati, modello, training, checkpoint e valutazione finale del test.
+
+```text
+Exercise 1.3
+pipeline sperimentale funzionante
+        ↓
+Exercise 2
+configurazione esplicita
++ moduli separati
++ smoke test
++ metriche train/validation
++ checkpoint configurabile
++ test ufficiale separato
+```
+
+---
+
+## Struttura
 
 ```text
 Exercise2/
-├── configuration.py     # OmegaConf loading, CLI overrides, validation
-├── data.py              # GTSRB split and DataLoaders
-├── models.py            # ResNet construction and freezing policies
-├── training.py          # runtime, optimizer, loops, checkpointing
-├── main.py              # training / smoke-test entry point
-├── evaluate_test.py     # independent official test evaluation
+├── configuration.py
+├── data.py
+├── models.py
+├── training.py
+├── main.py
+├── evaluate_test.py
 ├── configs/
 │   └── default.yaml
 ├── assets/
+│   └── per_class_f1.svg
 └── outputs/
 ```
 
-The previous small modules `runtime.py`, `optimization.py`, `engine.py`, `checkpointing.py`, and `experiment_paths.py` were merged into the modules that actually use their logic. This keeps the separation of responsibilities without fragmenting a relatively small laboratory pipeline.
+| File | Responsabilità |
+|---|---|
+| `configuration.py` | caricamento YAML, override OmegaConf e validazione |
+| `data.py` | split GTSRB e DataLoader |
+| `models.py` | costruzione ResNet, testa e policy di fine-tuning |
+| `training.py` | runtime, loss, optimizer, train/validation e checkpoint |
+| `main.py` | entry point per smoke test e training |
+| `evaluate_test.py` | valutazione separata sul test ufficiale |
 
-## Configuration
+La versione finale accorpa le piccole utility nei moduli che ne utilizzano direttamente la logica, mantenendo la separazione delle responsabilità senza frammentare inutilmente la pipeline.
 
-Default values are stored only in `configs/default.yaml`. OmegaConf merges command-line overrides on top and validates supported values and relevant relationships.
+---
+
+## Configurazione
+
+I valori di default sono definiti in `configs/default.yaml`.
+
+| Componente | Default |
+|---|---|
+| Backbone | `resnet18` |
+| Testa | `linear` |
+| Fine-tuning | `last_block` |
+| Batch size | 32 |
+| Epoche | 5 |
+| Loss | Cross Entropy |
+| Optimizer | AdamW |
+| LR backbone | `1e-4` |
+| LR testa | `1e-3` |
+| Weight decay | `1e-4` |
+| Validation split | 20% stratificato |
+| Checkpoint | minima validation loss |
+| Seed | 42 |
+| Device | `auto` |
+
+OmegaConf permette di modificare soltanto i parametri necessari:
 
 ```bash
 python Exercise2/main.py \
@@ -33,19 +81,7 @@ python Exercise2/main.py \
   training.epochs=10
 ```
 
-Supported values:
-
-| Component | Values |
-|---|---|
-| Backbone | `resnet18`, `resnet50` |
-| Head | `linear`, `mlp` |
-| Fine-tuning | `classifier`, `last_block`, `full` |
-| Loss | Cross Entropy |
-| Optimizer | AdamW |
-| Checkpoint metric | validation loss, accuracy, macro-F1 |
-| Device | `auto`, `cpu`, `cuda`, `cuda:<index>` |
-
-Checkpoint mode must remain coherent with the monitored metric:
+La configurazione viene validata prima dell'esecuzione. In particolare, criterio e modalità del checkpoint devono essere coerenti:
 
 ```text
 validation_loss      -> min
@@ -53,99 +89,109 @@ validation_accuracy  -> max
 validation_macro_f1  -> max
 ```
 
-## Data and preprocessing
+---
 
-The official GTSRB training split is divided with the same stratified 80/20 protocol and seed `42` used previously:
+## Dati e modello
 
-| Split | Images |
+Il protocollo resta coerente con l'Exercise 1.3:
+
+| Split | Immagini |
 |---|---:|
-| Internal training | 21,312 |
-| Validation | 5,328 |
-| Official test | 12,630 |
-| Classes | 43 |
+| Training interno | 21.312 |
+| Validation | 5.328 |
+| Test ufficiale | 12.630 |
+| Classi | 43 |
 
-Preprocessing comes directly from the selected Torchvision pretrained weights through `weights.transforms()`. No custom augmentation is introduced.
+Lo split train/validation è stratificato 80/20 con seed `42`.
 
-## Fine-tuning
+Il preprocessing deriva direttamente dai pesi Torchvision tramite `weights.transforms()`. Sono supportati:
 
-Strategies are unchanged:
+- ResNet-18 con `IMAGENET1K_V1`;
+- ResNet-50 con `IMAGENET1K_V2`;
+- testa `linear`;
+- testa `mlp`;
+- strategie `classifier`, `last_block`, `full`.
 
-| Strategy | Trainable modules |
-|---|---|
-| `classifier` | classifier head |
-| `last_block` | `layer4` + classifier |
-| `full` | complete network |
+Durante il selective fine-tuning, gli stadi BatchNorm congelati rimangono in modalità `eval()` per evitare l'aggiornamento involontario delle running statistics.
 
-Frozen BatchNorm stages remain in evaluation mode during selective fine-tuning so their running statistics are not modified.
+---
 
-The default optimizer remains AdamW with differentiated learning rates:
+## Training e checkpoint
 
-- backbone: `1e-4`;
-- classifier: `1e-3`;
-- weight decay: `1e-4`.
+Training e validation calcolano:
 
-Training and validation report loss, accuracy and macro-F1. The best checkpoint is selected only from validation metrics.
+- loss;
+- accuracy;
+- macro-F1;
+- numero di campioni e batch processati;
+- tempo di esecuzione.
+
+L'ottimizzazione usa `CrossEntropyLoss` e AdamW con learning rate differenziati:
+
+```text
+backbone    1e-4
+classifier  1e-3
+```
+
+Il miglior checkpoint può essere selezionato tramite:
+
+- `validation_loss`;
+- `validation_accuracy`;
+- `validation_macro_f1`.
+
+Il checkpoint contiene:
+
+- best epoch;
+- metrica monitorata;
+- valore della metrica;
+- `model_state_dict`;
+- `optimizer_state_dict`;
+- configurazione risolta.
+
+Prima del salvataggio i tensori vengono spostati su CPU. La scrittura è atomica: viene creato prima un file temporaneo `best_model.pt.tmp`, poi sostituito con `best_model.pt`.
+
+Al termine del training il best checkpoint viene ricaricato automaticamente.
+
+---
 
 ## Smoke test
+
+Prima di una run completa è possibile verificare l'intera pipeline su pochi batch reali:
 
 ```bash
 python Exercise2/main.py experiment.smoke_test_batches=2
 ```
 
-This runs the real data/model/optimizer pipeline on a limited number of train and validation batches and checks forward, backward, optimizer step and evaluation without starting a full experiment.
+Lo smoke test esegue:
 
-## Full training
-
-Default run:
-
-```bash
-python Exercise2/main.py
+```text
+dati
+ ↓
+forward
+ ↓
+loss
+ ↓
+backward
+ ↓
+optimizer step
+ ↓
+validation
 ```
 
-ResNet-50 example:
+e termina senza avviare il training multi-epoca o creare una run completa.
 
-```bash
-python Exercise2/main.py \
-  model.name=resnet50 \
-  data.batch_size=16 \
-  model.fine_tuning_strategy=last_block \
-  model.classifier_type=linear \
-  training.epochs=5
-```
+---
 
-Macro-F1 checkpoint selection:
+## Valutazione separata del test
 
-```bash
-python Exercise2/main.py \
-  checkpoint.monitor=validation_macro_f1 \
-  checkpoint.mode=max
-```
-
-Deterministic execution:
-
-```bash
-python Exercise2/main.py experiment.deterministic=true
-```
-
-## Checkpointing
-
-The best checkpoint still stores:
-
-- selected epoch and validation metric;
-- model state dictionary;
-- optimizer state dictionary;
-- complete resolved configuration.
-
-State is moved to CPU before serialization and writing remains atomic through a temporary `best_model.pt.tmp` file.
-
-## Separate test evaluation
+Il test ufficiale viene valutato esplicitamente a partire dal best checkpoint:
 
 ```bash
 python Exercise2/evaluate_test.py \
   --checkpoint Exercise2/outputs/runs/<run_id>/best_model.pt
 ```
 
-Optional explicit device:
+È possibile forzare il device:
 
 ```bash
 python Exercise2/evaluate_test.py \
@@ -153,7 +199,7 @@ python Exercise2/evaluate_test.py \
   --device cuda:0
 ```
 
-The test script reconstructs preprocessing, loaders and model from the checkpoint configuration, then produces:
+Lo script legge la configurazione salvata nel checkpoint, ricostruisce preprocessing, DataLoader e modello e produce:
 
 ```text
 test_metrics.json
@@ -161,47 +207,148 @@ classification_report.json
 predictions.npz
 ```
 
-Keeping test evaluation separate prevents the official test split from being used for model selection.
+Questa separazione impedisce che il test ufficiale partecipi alla selezione del modello.
 
-## Reference run already obtained
+---
 
-The previously completed reference run remains the experimental reference; this refactor does not redefine or replace its results.
+## Run di riferimento
 
-| Component | Value |
+L'Exercise 2 è stato verificato con una singola run completa:
+
+| Componente | Valore |
 |---|---|
-| Run name | `resnet18-lastblock-mlp` |
 | Backbone | ResNet-18 |
-| Head | MLP |
-| Strategy | `last_block` |
-| Epochs | 10 |
+| Strategia | `last_block` |
+| Testa | MLP |
+| Epoche | 10 |
 | Batch size | 32 |
 | Checkpoint monitor | `validation_macro_f1` |
 | Checkpoint mode | `max` |
 | Seed | 42 |
+| Best epoch | 10 |
 
-Selected checkpoint: epoch **10**.
+Risultati:
 
-| Metric | Value |
+| Metrica | Valore |
 |---|---:|
-| Best validation macro-F1 | 0.9972 |
-| Test loss | 0.1416 |
-| Test accuracy | 0.9645 |
-| Test macro-F1 | 0.9590 |
-| Test samples | 12,630 |
+| Best validation macro-F1 | **0.9972** |
+| Test loss | **0.1416** |
+| Test accuracy | **0.9645** |
+| Test macro-F1 | **0.9590** |
+| Test samples | 12.630 |
 | Test evaluation time | 9.87 s |
 
-These values come from the existing experiment artifacts and are not recomputed by the refactor.
+Il gap tra validation macro-F1 e test macro-F1 è di circa **3,8 punti percentuali**, indicando che il test ufficiale è sensibilmente più difficile dello split interno pur mantenendo prestazioni elevate.
 
-## Reproducibility and limitations
+Questa run serve come **verifica end-to-end della pipeline** e non come dimostrazione della superiorità di `last_block` o della testa MLP rispetto alle alternative.
 
-Python, NumPy and PyTorch RNGs are seeded; DataLoader workers and the training generator are also seeded. With `experiment.deterministic=true`, deterministic PyTorch algorithms are requested and cuDNN benchmarking is disabled.
+<p align="center">
+  <img src="assets/per_class_f1.svg"
+       alt="F1-score per classe sul test ufficiale"
+       width="950">
+</p>
 
-The reference result uses one seed and non-deterministic execution. The internal validation split is easier than the official test set. Repeated test evaluation should therefore be avoided during model selection.
+La maggior parte delle classi raggiunge F1 elevati. Le principali criticità sono:
 
-The unused W&B configuration previously present in the Exercise 2 schema was removed: unlike Exercise 1.3, this pipeline never initialized or logged to W&B. Removing those dead options does not alter an executed experiment.
+- classe **22**: F1 `0.8585`, soprattutto per recall basso;
+- classe **29**: F1 `0.8586`, con precision più bassa;
+- classe **28**: F1 `0.9058`, con recall quasi perfetto ma precision inferiore.
 
-## References and AI assistance
+La classe 17 viene invece classificata correttamente su tutti i 360 esempi del test.
 
-Main external resources: GTSRB, `torchvision.datasets.GTSRB`, Torchvision pretrained ResNet weights/transforms, PyTorch, OmegaConf and Scikit-learn metrics.
+---
 
-ChatGPT was used to discuss the assignment, explain pipeline concepts, review software organization, assist debugging, and revise documentation. Suggestions were reviewed and validated by the author; reported numerical results come from experiment artifacts.
+## Riproduzione
+
+L'ambiente condiviso del Laboratorio 1 è definito in [`../environment.yml`](../environment.yml).
+
+Dalla root del repository:
+
+```bash
+conda env create -f DLA_LAB1/environment.yml
+conda activate DLA2026_clean
+cd DLA_LAB1
+```
+
+### Smoke test
+
+```bash
+python Exercise2/main.py experiment.smoke_test_batches=2
+```
+
+### Training con configurazione di default
+
+```bash
+python Exercise2/main.py
+```
+
+### Esempio con override
+
+```bash
+python Exercise2/main.py \
+  model.name=resnet18 \
+  model.classifier_type=mlp \
+  model.fine_tuning_strategy=last_block \
+  training.epochs=10 \
+  checkpoint.monitor=validation_macro_f1 \
+  checkpoint.mode=max
+```
+
+### Valutazione finale
+
+```bash
+python Exercise2/evaluate_test.py \
+  --checkpoint Exercise2/outputs/runs/<run_id>/best_model.pt
+```
+
+---
+
+## Output e riproducibilità
+
+Una run completa genera una directory univoca:
+
+```text
+Exercise2/outputs/runs/
+└── <timestamp>_<model>-<strategy>-<classifier>/
+    ├── best_model.pt
+    ├── test_metrics.json
+    ├── classification_report.json
+    └── predictions.npz
+```
+
+Il progetto controlla:
+
+- seed Python, NumPy e PyTorch;
+- seed dei DataLoader;
+- split stratificato;
+- configurazione salvata nel checkpoint;
+- selezione del best checkpoint sulla validation;
+- modalità deterministica opzionale tramite `experiment.deterministic=true`.
+
+Con `deterministic=false`, che è il default, non viene assunto determinismo bit-a-bit delle operazioni GPU.
+
+L'Exercise 2 non utilizza W&B nella versione finale: il tracking è locale tramite checkpoint e artifact della run.
+
+---
+
+## Limiti
+
+- È stata completata una sola run di riferimento: non è una nuova campagna di confronto tra configurazioni.
+- La run di riferimento usa un solo seed.
+- La validation interna risulta più semplice del test ufficiale.
+- La history delle epoche viene mantenuta durante il training, ma la versione corrente non la salva automaticamente in CSV o JSON.
+- Il test deve essere eseguito esplicitamente dopo il training; la separazione è intenzionale e fa parte del protocollo sperimentale.
+
+---
+
+## Riferimenti e assistenza AI
+
+Riferimenti principali:
+
+- GTSRB / `torchvision.datasets.GTSRB`;
+- ResNet-18 e ResNet-50 pre-addestrate di Torchvision;
+- PyTorch e Torchvision;
+- OmegaConf;
+- Scikit-learn.
+
+ChatGPT è stato utilizzato come supporto per chiarimenti teorici, organizzazione e consolidamento della pipeline, revisione del codice, debugging e documentazione. Le proposte generate sono state verificate e adattate; le metriche riportate derivano dagli artifact reali della run eseguita.
