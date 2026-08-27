@@ -66,3 +66,6 @@ hf_cache/
 # ============================================================
 .DS_Store
 Thumbs.db
+
+# Exercise 3 development checks
+DLA_LAB1/Exercise3/checks/
