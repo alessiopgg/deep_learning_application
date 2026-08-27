@@ -1,188 +1,216 @@
-# Exercise 3.3 — Traffic Sign Object Detection
+# Exercise 3.3 — Object Detection dei segnali stradali
 
-This exercise extends the GTSRB classification work developed in the
-previous exercises to **object detection in complete road scenes**.
+L'Exercise 3.3 estende il lavoro di classificazione svolto su GTSRB alla **object detection in scene stradali complete**.
 
-Instead of receiving an image already cropped around one traffic sign, the
-model must:
+Negli esercizi precedenti il modello riceveva immagini già ritagliate attorno a un singolo cartello. Qui deve invece:
 
-1. identify whether one or more traffic signs are present;
-2. localize each sign with a bounding box;
-3. assign each detected sign to one of the 43 canonical GTSRB classes.
+1. individuare se uno o più segnali sono presenti;
+2. localizzare ogni oggetto con una bounding box;
+3. assegnare a ciascuna detection una delle 43 classi GTSRB.
 
-The detector is based on **Faster R-CNN with a ResNet-50-FPN backbone**.
-The experimental study compares the original COCO initialization with a
-ResNet-50 body previously fine-tuned as a GTSRB image classifier.
+Il detector utilizzato è **Faster R-CNN con backbone ResNet-50-FPN**. Lo studio sperimentale confronta l'inizializzazione COCO del detector con il trasferimento di un body ResNet-50 precedentemente fine-tuned come classificatore GTSRB.
+
+La domanda principale è quindi:
+
+> un backbone specializzato sulla classificazione di crop GTSRB trasferisce meglio di un backbone COCO quando il task diventa object detection?
 
 ---
 
-## Main result
+## Dal crop alla scena completa
 
-The best validation configuration was:
+Il cambio di task è sostanziale.
 
-> **Run A — COCO-initialized backbone, frozen**
+```text
+Classificazione GTSRB
+crop centrato sul cartello
+        ↓
+un'etichetta per immagine
 
-| Split | mAP@[0.50:0.95] | AP50 | AP75 |
-|---|---:|---:|---:|
-| Validation | **0.220813** | **0.323058** | **0.272360** |
-| Test | **0.228329** | **0.328921** | **0.289682** |
-
-The final configuration was selected exclusively on the validation split.
-The test split was evaluated once, after model selection.
+Object detection
+scena stradale completa
+        ↓
+0, 1 o più oggetti
+        ↓
+bounding box + classe + score
+```
 
 <p align="center">
-  <img src="assets/validation_map_comparison.png"
-       alt="Validation mAP, AP50 and AP75 comparison for runs A to D"
-       width="900">
+  <img src="assets/dataset_scene_ground_truth.png"
+       alt="Scena completa con più cartelli annotati"
+       width="1000">
 </p>
 
-The GTSRB initialization was transferred and verified correctly, but it did
-not outperform the COCO baseline under the tested protocol. Progressive
-unfreezing improved the GTSRB variants, although none recovered the full
-performance gap.
-
-This is a result about the specific dataset, detector, transfer procedure,
-and five-epoch protocol used here. It does **not** establish that
-domain-specific pretraining is generally ineffective.
+Nelle scene complete i cartelli occupano una porzione molto piccola dell'immagine e devono essere localizzati prima di poter essere classificati. Questo rende il task più difficile e modifica anche il tipo di rappresentazioni utili al modello.
 
 ---
 
 ## Dataset
 
-The detection dataset is loaded from Hugging Face:
+Il dataset di detection è:
 
 ```text
-repository: keremberke/german-traffic-sign-detection
+keremberke/german-traffic-sign-detection
 configuration: full
-revision: a549a284a1fefdc761ad459ee85f50c5ad8138ef
-datasets version: 3.6.0
 ```
 
-The original annotations use bounding boxes in:
+Le immagini hanno risoluzione fissa:
+
+```text
+1360 × 800 pixel
+```
+
+Le annotazioni originarie rappresentano le bounding box come:
 
 ```text
 [x_min, y_min, width, height]
 ```
 
-The dataset adapter converts them to absolute `XYXY` coordinates, as
-required by Torchvision detection models.
+L'adapter le converte nel formato assoluto `XYXY` richiesto da Torchvision:
 
-### Verified split sizes
+```text
+[x_min, y_min, x_max, y_max]
+```
 
-One exact duplicate annotation is removed by the adapter.
+Le classi del detector sono organizzate come:
 
-| Split | Images | Objects | Empty images |
+```text
+0      -> background
+1–43   -> classi GTSRB
+```
+
+Il predictor finale ha quindi **44 classi**.
+
+### Split effettivamente usati
+
+L'EDA originaria rileva 852 annotazioni valide. Due righe del training rappresentano però la stessa annotazione esatta; l'adapter ne mantiene una sola copia.
+
+Il dataset realmente utilizzato dal detector contiene quindi:
+
+| Split | Immagini | Oggetti | Immagini vuote |
 |---|---:|---:|---:|
 | Train | 383 | 599 | 29 |
 | Validation | 108 | 170 | 6 |
 | Test | 54 | 82 | 4 |
-| **Total** | **545** | **851** | **39** |
+| **Totale** | **545** | **851** | **39** |
 
-Empty images are retained because they provide useful background examples
-and teach the detector that some scenes should produce no foreground
-detections.
-
-### Detector labels
-
-- detector label `0`: background;
-- detector labels `1–43`: canonical GTSRB classes;
-- detector output classes: `44`;
-- image format: `torch.float32` in `[0, 1]`;
-- bounding boxes: absolute `XYXY`.
-
-No external resize, ImageNet normalization, or custom data augmentation is
-applied in the baseline. Faster R-CNN performs its own resizing and
-normalization internally.
+Le immagini senza oggetti vengono conservate: forniscono esempi di background e permettono di valutare eventuali falsi positivi in scene prive di segnali.
 
 ---
 
-## Exploratory analysis
+## Analisi esplorativa
 
-All images have resolution:
+### Dimensione delle bounding box
 
-```text
-1360 × 800 pixels
-```
+Le bounding box sono molto piccole rispetto alle immagini complete.
 
-The main difficulty is the small apparent size of traffic signs inside the
-complete scenes.
-
-| Bounding-box statistic | Width | Height |
+| Statistica | Larghezza | Altezza |
 |---|---:|---:|
-| Minimum | 16 px | 16 px |
-| Median | 38 px | 37 px |
-| Mean | 43.4 px | 42.8 px |
-| 95th percentile | 90.4 px | 89.4 px |
-| Maximum | 127 px | 128 px |
+| Minimo | 16 px | 16 px |
+| Mediana | 38 px | 37 px |
+| Media | 43.4 px | 42.8 px |
+| 95° percentile | 90.4 px | 89.4 px |
+| Massimo | 127 px | 128 px |
 
-The median bounding box occupies approximately `0.126%` of the image area.
+La bounding box mediana occupa circa **0.126%** dell'area dell'immagine.
 
-Using COCO scale thresholds:
+### Scale COCO
 
-| Scale | Objects | Percentage |
+Sul dataset effettivo dopo deduplicazione:
+
+| Scala | Oggetti | Percentuale |
 |---|---:|---:|
-| Small | 315 | 37.0% |
-| Medium | 503 | 59.0% |
+| Small | 314 | 36.9% |
+| Medium | 503 | 59.1% |
 | Large | 34 | 4.0% |
 
-The dataset is also strongly imbalanced. In the training split, the most
-frequent class contains 50 objects, while the least frequent represented
-class contains one object.
+Circa il **96% degli oggetti è small o medium**.
 
-Only 41 of the 43 foreground classes are represented in training:
+<p align="center">
+  <img src="assets/object_scale_distribution.png"
+       alt="Distribuzione delle scale COCO dopo deduplicazione"
+       width="800">
+</p>
+
+La rarità degli oggetti large rende le relative metriche particolarmente sensibili al basso supporto.
+
+### Distribuzione delle classi
+
+Il training è fortemente sbilanciato: la classe più frequente contiene 50 oggetti, mentre alcune classi compaiono una sola volta.
+
+Due classi non sono presenti nel training:
 
 ```text
-absent from train:
-- animals
-- restriction ends
+animals
+restriction ends
 ```
 
-The official splits are retained for the baseline to preserve a clear and
-reproducible evaluation protocol. Consequently, per-class metrics for rare
-or unseen classes must be interpreted cautiously.
+La classe `animals` compare nel test, mentre `restriction ends` compare nella validation.
 
-### Annotation integrity
+<p align="center">
+  <img src="assets/class_distribution_train.png"
+       alt="Distribuzione delle classi nel training dopo deduplicazione"
+       width="900">
+</p>
 
-| Check | Result |
+Gli split ufficiali vengono comunque mantenuti per preservare un protocollo riproducibile. Le metriche per classe devono quindi essere interpretate insieme al relativo supporto.
+
+### Integrità delle annotazioni
+
+I controlli sull'EDA hanno rilevato:
+
+| Controllo | Risultato |
 |---|---:|
-| Valid boxes before deduplication | 852 |
-| Invalid boxes | 0 |
-| Degenerate boxes | 0 |
-| Non-finite boxes | 0 |
-| Out-of-image boxes | 0 |
-| Invalid categories | 0 |
-| Exact duplicate rows | 2 |
-| Objects after keeping one copy | 851 |
+| Annotazioni valide originarie | 852 |
+| Box invalide | 0 |
+| Box degeneri | 0 |
+| Box non finite | 0 |
+| Box fuori immagine | 0 |
+| Categorie invalide | 0 |
+| Copia duplicata rimossa | 1 |
+| Oggetti usati dal detector | 851 |
 
-The principal dataset limitations are therefore not geometric corruption,
-but small objects, limited sample size, class imbalance, and missing
-training classes.
+Le principali difficoltà del dataset non sono quindi errori geometrici, ma **oggetti piccoli, forte sbilanciamento, classi rare o assenti e numero limitato di immagini**.
 
 ---
 
-## Detector architecture
+## Preprocessing e dataset adapter
+
+Il detector riceve immagini come tensori `float32` nell'intervallo `[0, 1]`.
+
+Non viene applicata una normalizzazione ImageNet esterna e non viene introdotto un resize manuale: Faster R-CNN gestisce internamente normalizzazione e ridimensionamento.
+
+La baseline non utilizza augmentation personalizzata. Questa scelta mantiene il confronto A–D concentrato sull'inizializzazione e sulla strategia di fine-tuning del backbone.
+
+Le anchor standard vengono mantenute nella prima configurazione. Le bounding box sono prevalentemente quadrate, quindi l'EDA non ha motivato una modifica immediata degli aspect ratio delle anchor.
+
+---
+
+## Architettura Faster R-CNN ResNet-50-FPN
 
 ```mermaid
 flowchart LR
-    A[Road-scene image] --> B[ResNet-50 backbone]
-    B --> C[Feature Pyramid Network]
-    C --> D[Region Proposal Network]
-    D --> E[RoI Align and box head]
-    E --> F[44-class predictor]
-    E --> G[Bounding-box regressor]
+    A["Scena stradale"] --> B["ResNet-50"]
+    B --> C["Feature Pyramid Network"]
+    C --> D["Region Proposal Network"]
+    D --> E["RoI Align"]
+    E --> F["Box head"]
+    F --> G["44 classi"]
+    F --> H["Regressione bounding box"]
 ```
 
-Main components:
+Le componenti principali sono:
 
-- **ResNet-50 body:** extracts hierarchical visual features;
-- **FPN:** produces multi-scale feature maps, particularly important for
-  small objects;
-- **RPN:** proposes candidate object regions;
-- **RoI box head:** classifies each proposal and refines its geometry;
-- **box predictor:** outputs 44 class scores and class-specific box
-  corrections.
+- **ResNet-50 body:** estrae feature gerarchiche dalla scena;
+- **FPN:** combina feature a diverse scale e produce mappe multi-risoluzione;
+- **RPN:** genera candidate region proposals;
+- **RoI Align:** produce rappresentazioni di dimensione fissa per ogni proposta;
+- **box head:** classifica le proposte e raffina le bounding box.
 
-The Faster R-CNN training loss is the sum of:
+La FPN è particolarmente rilevante in questo dataset perché la maggior parte dei cartelli è small o medium.
+
+### Loss
+
+Durante il training Faster R-CNN restituisce quattro componenti principali:
 
 ```text
 classification loss
@@ -191,34 +219,39 @@ classification loss
 + RPN box-regression loss
 ```
 
-Loss is used to optimize the detector and select the best epoch within each
-run. Detection quality is compared using mAP and related metrics, not by
-interpreting loss as an accuracy percentage.
+La total loss viene usata per ottimizzare il detector e per selezionare il best checkpoint **all'interno di ogni run**.
+
+La qualità dei detector viene invece confrontata tramite mAP, AP e metriche di precision/recall: una loss più bassa non equivale direttamente a una detection migliore.
 
 ---
 
-## GTSRB backbone preparation and transfer
+## Preparazione del backbone GTSRB
 
-Before runs B–D, a ResNet-50 classifier was fully fine-tuned on the cropped
-GTSRB classification dataset.
+Prima delle run B–D viene addestrata una ResNet-50 di classificazione sul dataset GTSRB ritagliato.
 
-| Setting | Value |
+| Componente | Valore |
 |---|---|
-| Training / validation images | 21,312 / 5,328 |
-| Classifier classes | 43 |
-| Classifier head | linear |
-| Fine-tuning strategy | full |
+| Backbone | ResNet-50 |
+| Strategia | `full` |
+| Testa | linear |
+| Classi | 43 |
 | Batch size | 16 |
-| Epochs | 5 |
+| Epoche | 5 |
 | Loss | Cross Entropy |
 | Optimizer | AdamW |
-| Backbone learning rate | `1e-4` |
-| Classifier learning rate | `1e-3` |
+| LR backbone | `1e-4` |
+| LR testa | `1e-3` |
 | Weight decay | `1e-4` |
-| Selected epoch | 5 |
+| Best epoch | 5 |
 | Validation loss | 0.004080 |
+| Validation accuracy | circa 0.9985 |
+| Validation macro-F1 | circa 0.9975 |
 
-Only the convolutional body is transferred:
+Il test di classificazione non viene utilizzato per scegliere questo checkpoint.
+
+### Trasferimento nel detector
+
+Viene trasferito soltanto il body convoluzionale:
 
 ```text
 conv1
@@ -229,173 +262,258 @@ layer3
 layer4
 ```
 
-The classification-specific `avgpool` and `fc` modules are excluded.
+Non vengono trasferiti:
 
-Strict transfer validation found:
+```text
+avgpool
+fc
+```
 
-| Check | Result |
+```mermaid
+flowchart LR
+    A["ResNet-50 GTSRB classifier"] --> B["conv1 + bn1 + layer1-4"]
+    B --> C["Body Faster R-CNN"]
+    A -. esclusi .-> D["avgpool + fc"]
+```
+
+Il trasferimento è stato verificato in modo stretto:
+
+| Verifica | Risultato |
 |---|---:|
-| Target body tensors required | 265 |
-| Target body tensors loaded | 265 |
-| Shape mismatches | 0 |
-| Exact post-load verification | passed |
-| Backbone changed from COCO | confirmed |
+| Tensori richiesti | 265 |
+| Tensori caricati | 265 |
+| Shape mismatch | 0 |
+| Uguaglianza dopo il load | verificata |
+| Differenza rispetto al body COCO | confermata |
 
-The poor performance of the GTSRB detector variants therefore cannot be
-attributed to a missing or partially loaded checkpoint.
+Le basse prestazioni delle varianti GTSRB non possono quindi essere attribuite a un caricamento incompleto o errato del checkpoint.
 
 ---
 
-## Experimental questions
+## Domande sperimentali
 
-The study separates two questions.
+Lo studio separa due confronti.
 
-### 1. Does the GTSRB classification backbone improve detection?
+### 1. Effetto dell'inizializzazione
 
 ```text
 A — COCO frozen
-versus
+vs
 B — GTSRB frozen
 ```
 
-A and B use the same trainable detector components and the same number of
-trainable parameters. Their main intended difference is the initialization
-of the ResNet-50 body.
+A e B hanno la stessa policy di congelamento e lo stesso numero di parametri trainabili. Il confronto isola quindi, per quanto possibile, l'effetto dell'origine dei pesi del body ResNet-50.
 
-### 2. Can progressive adaptation recover performance?
+### 2. Progressive unfreezing
 
 ```text
 B — GTSRB frozen
-versus
+vs
 C — GTSRB layer4 + FPN
-versus
+vs
 D — GTSRB layer3 + layer4 + FPN
 ```
 
+Le run C e D verificano se una maggiore capacità di adattamento permette al backbone GTSRB di recuperare parte del gap.
+
 ---
 
-## Experimental matrix
+## Matrice sperimentale
 
-| Run | Initialization | Trainable backbone components | Trainable parameters | Best epoch |
+| Run | Inizializzazione | Componenti backbone/FPN trainabili | Parametri trainabili | Best epoch |
 |---|---|---|---:|---:|
-| A | COCO | none; detector heads only | 14,715,115 | 5 |
-| B | GTSRB | none; detector heads only | 14,715,115 | 3 |
-| C | GTSRB | layer4 + FPN | 33,001,707 | 5 |
-| D | GTSRB | layer3 + layer4 + FPN | 40,079,595 | 5 |
+| A | COCO | nessuno | 14,715,115 | 5 |
+| B | GTSRB | nessuno | 14,715,115 | 3 |
+| C | GTSRB | `layer4` + FPN | 33,001,707 | 5 |
+| D | GTSRB | `layer3` + `layer4` + FPN | 40,079,595 | 5 |
 
-### Common protocol
+### Protocollo comune
 
-All four runs use:
+Tutte le run utilizzano:
 
 - Faster R-CNN ResNet-50-FPN;
-- identical train and validation splits;
+- gli stessi split train/validation;
 - seed `42`;
 - batch size `1`;
-- `5` training epochs;
-- SGD optimizer;
+- `5` epoche;
+- SGD;
 - momentum `0.9`;
 - weight decay `0.0005`;
 - detector learning rate `0.005`;
-- backbone learning rate `0.0001` when trainable;
-- StepLR with step size `3` and gamma `0.1`;
+- backbone learning rate `0.0001` quando trainabile;
+- StepLR con `step_size=3` e `gamma=0.1`;
 - automatic mixed precision;
-- best-checkpoint selection by minimum validation total loss;
-- final configuration selection by validation mAP@[0.50:0.95];
-- no test evaluation during the A–D comparison.
+- best checkpoint della singola run selezionato sulla **minima validation total loss**.
 
-The test split is not used to choose the model.
+Il confronto tra le quattro configurazioni usa invece come metrica primaria la **validation mAP@[0.50:0.95]**.
+
+Il test rimane chiuso durante l'intera matrice A–D.
 
 ---
 
-## Validation results
+## Metriche di valutazione
+
+### IoU
+
+L'Intersection over Union misura la sovrapposizione tra bounding box predetta e ground truth.
+
+Le diagnostiche a soglia fissa usano:
+
+```text
+score threshold = 0.5
+IoU threshold   = 0.5
+```
+
+Da questo matching vengono calcolati:
+
+- true positive;
+- false positive;
+- false negative;
+- precision;
+- recall;
+- F1.
+
+### COCO-style mAP
+
+La metrica principale è:
+
+```text
+mAP@[0.50:0.95]
+```
+
+che media la Average Precision su più soglie IoU.
+
+Vengono inoltre riportate:
+
+- AP50;
+- AP75;
+- AP small;
+- AP medium;
+- AP large;
+- AR@100.
+
+Le metriche a soglia fissa e la mAP sono complementari: la prima descrive un singolo operating point, mentre la seconda considera ranking e più criteri IoU.
+
+---
+
+## Risultati di validation
 
 | Run | Val. loss | mAP | AP50 | AP75 | Precision@0.5 | Recall@0.5 | F1@0.5 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| A | 0.211201 | **0.220813** | **0.323058** | **0.272360** | 0.8611 | 0.1824 | **0.3010** |
+| A | 0.211201 | **0.220813** | **0.323058** | **0.272360** | **0.8611** | **0.1824** | **0.3010** |
 | B | 0.265388 | 0.025346 | 0.058273 | 0.017204 | 0.0000 | 0.0000 | 0.0000 |
 | C | 0.289489 | 0.048158 | 0.116793 | 0.018993 | 0.0000 | 0.0000 | 0.0000 |
 | D | 0.264972 | 0.060371 | 0.154755 | 0.046821 | 0.5556 | 0.0294 | 0.0559 |
 
-### A versus B: initialization effect
+<p align="center">
+  <img src="assets/validation_map_comparison.png"
+       alt="Confronto mAP, AP50 e AP75 delle run A-D"
+       width="900">
+</p>
+
+### A vs B — effetto dell'inizializzazione
 
 ```text
-A mAP: 0.220813
-B mAP: 0.025346
-absolute difference: -0.195467
-relative difference: -88.5%
+A mAP = 0.220813
+B mAP = 0.025346
 ```
 
-The frozen GTSRB body is substantially weaker than the frozen COCO body for
-this detection task.
+La differenza assoluta è `0.195467`; B risulta circa **88.5% inferiore** ad A.
 
-### B → C → D: progressive unfreezing
+Poiché A e B hanno lo stesso numero di parametri trainabili e la stessa policy di congelamento, questo è il confronto più diretto dell'intero studio.
 
-Unfreezing `layer4` and the FPN improves mAP from `0.025346` to `0.048158`.
-Unfreezing `layer3` as well raises it further to `0.060371`.
+### B → C → D — progressive unfreezing
 
-This shows that adaptation helps the GTSRB representation, but Run D
-remains approximately 72.7% below Run A in mAP.
+Lo sblocco progressivo migliora le varianti GTSRB:
+
+```text
+B  0.025346
+↓
+C  0.048158
+↓
+D  0.060371
+```
+
+C migliora B di circa il **90%** in termini relativi. D migliora C di circa il **25.4%**.
+
+L'adattamento recupera quindi parte delle prestazioni, ma D rimane circa **72.7% sotto A** in mAP.
+
+### Diagnostica a soglia fissa
 
 <p align="center">
   <img src="assets/fixed_threshold_diagnostics.png"
-       alt="Fixed-threshold precision, recall and F1 comparison"
+       alt="Precision, recall e F1 a score 0.5 e IoU 0.5"
        width="900">
 </p>
 
-The fixed-threshold values describe one operating point only:
+A è l'unica configurazione con un equilibrio utile tra precision e recall a score `0.5`.
 
-```text
-score threshold = 0.5
-IoU threshold = 0.5
-```
+B non produce true positive sopra soglia; C non produce true positive e genera un falso positivo; D recupera alcune detection ma rimane molto conservativa.
 
-They complement, but do not replace, the COCO-style mAP comparison.
+Una mAP non nulla con recall@0.5 nullo non è una contraddizione: la mAP considera l'intero ranking degli score e più soglie IoU.
 
 ---
 
-## Training behavior and cost
+## Andamento del training
 
 <p align="center">
   <img src="assets/loss_curves.png"
-       alt="Training and validation total-loss curves for runs A to D"
-       width="900">
+       alt="Training e validation total loss delle run A-D"
+       width="950">
 </p>
 
-Run A reduces training loss from `0.292408` to `0.173738` and validation
-loss from `0.277499` to `0.211201`. Its best checkpoint occurs at epoch 5.
+La Run A riduce la training total loss da `0.292408` a `0.173738` e la validation loss da `0.277499` a `0.211201`. Il best checkpoint è l'epoca 5.
 
-Run B reaches its best validation loss at epoch 3 and then degrades while
-training loss continues to improve.
+La Run B raggiunge la migliore validation loss all'epoca 3 e poi peggiora mentre la training loss continua a scendere.
 
-Runs C and D continue improving through epoch 5. Additional training could
-potentially help them, but the fixed five-epoch protocol remains the basis
-of the reported comparison.
+Le run C e D continuano invece a migliorare fino all'epoca 5. Questo suggerisce che un budget maggiore potrebbe aiutarle, ma il confronto riportato rimane quello definito dal protocollo a cinque epoche.
 
-<p align="center">
-  <img src="assets/training_cost.png"
-       alt="Relative training-cost comparison for runs A to D"
-       width="780">
-</p>
+---
 
-| Run | Trainable parameters | Peak allocated GPU memory | Training time |
+## Prestazioni e costo computazionale
+
+| Run | Parametri trainabili | Picco GPU allocato | Training |
 |---|---:|---:|---:|
 | A | 14,715,115 | 5,287 MiB | 45.1 s |
 | B | 14,715,115 | 5,287 MiB | 44.2 s |
 | C | 33,001,707 | 5,467 MiB | 54.3 s |
 | D | 40,079,595 | 5,730 MiB | 58.8 s |
 
-Run A is both the best-performing configuration and one of the least
-expensive.
+<p align="center">
+  <img src="assets/quality_vs_trainable_parameters.png"
+       alt="Validation mAP rispetto ai parametri trainabili"
+       width="850">
+</p>
+
+A è simultaneamente la configurazione con **mAP più alta** e una delle meno costose.
+
+Lo sblocco progressivo del backbone aumenta parametri trainabili, memoria e tempo, ma nel protocollo eseguito il guadagno delle varianti GTSRB non è sufficiente a recuperare il vantaggio della baseline COCO.
 
 ---
 
-## Final test evaluation
+## Selezione del modello
 
-Only the selected Run A checkpoint is evaluated on the official test split.
+La selezione finale viene effettuata **esclusivamente sulla validation mAP@[0.50:0.95]**.
 
-### COCO-style metrics
+La configurazione scelta è:
 
-| Metric | Value |
+> **Run A — body COCO congelato**
+
+```text
+validation mAP@[0.50:0.95] = 0.220813
+```
+
+Solo dopo questa decisione viene aperto il test ufficiale.
+
+---
+
+## Valutazione finale sul test
+
+La Run A viene valutata sulle 54 immagini e 82 oggetti dello split di test.
+
+### Metriche COCO-style
+
+| Metrica | Valore |
 |---|---:|
 | mAP@[0.50:0.95] | **0.228329** |
 | AP50 | 0.328921 |
@@ -405,157 +523,141 @@ Only the selected Run A checkpoint is evaluated on the official test split.
 | AP large | 0.850000 |
 | AR@100 | 0.529316 |
 
-Validation mAP is `0.220813`; test mAP is `0.228329`. The final result does
-not show an evident validation-to-test collapse.
+La mAP di test è molto vicina alla validation:
 
-The large-object result should be interpreted cautiously because large
-objects are very rare.
+```text
+validation mAP = 0.220813
+test mAP       = 0.228329
+```
 
-### Fixed-threshold diagnostics
+Non emerge quindi un evidente collasso validation → test.
 
-At score threshold `0.5` and IoU `0.5`:
+`AP large = 0.85` va interpretata con cautela: gli oggetti large sono solo il 4% del dataset e il supporto nel test è molto ridotto.
 
-| Metric | Value |
+### Diagnostica a score 0.5
+
+| Metrica | Valore |
 |---|---:|
 | Precision | 0.523810 |
 | Recall | 0.134146 |
 | F1 | 0.213592 |
-| True positives | 11 |
-| False positives | 10 |
-| False negatives | 71 |
+| True positive | 11 |
+| False positive | 10 |
+| False negative | 71 |
 | Mean matched IoU | 0.859288 |
 | Empty-image FP rate | 0.000000 |
 
-The detector is conservative at this score threshold. It produces a
-moderate proportion of correct detections, but misses many real objects.
-
-mAP is measured by varying score thresholds and IoU criteria, whereas these
-fixed-threshold values describe a single operating point. The two views are
-therefore complementary.
+Il detector è **conservativo** all'operating point scelto: quando produce una detection sopra soglia la localizzazione abbinata è spesso buona, ma molti cartelli non raggiungono uno score sufficiente.
 
 ---
 
-## Qualitative examples
+## Analisi qualitativa
 
-### Successful detection
+### Predizione plausibile sotto soglia
 
 <p align="center">
-  <img src="assets/qualitative_success.png"
-       alt="Successful traffic-sign detection example"
+  <img src="assets/qualitative_below_threshold.png"
+       alt="Predizione plausibile ma sotto la soglia 0.5"
        width="1000">
 </p>
 
-A sufficiently visible triangular sign is localized with a plausible
-bounding box and the correct class.
+In questo esempio la regione predetta coincide in modo plausibile con il cartello reale e la classe è coerente, ma lo score massimo è circa `0.43`.
 
-### False-negative case
+Con una soglia fissa a `0.5`, la detection viene quindi scartata e conteggiata come false negative.
+
+Questo caso mostra concretamente perché la mAP, che considera il ranking delle predizioni, può risultare sensibilmente migliore del recall misurato a una singola soglia.
+
+### Cartelli piccoli e distanti
 
 <p align="center">
   <img src="assets/qualitative_false_negatives.png"
-       alt="Example with several missed small traffic signs"
+       alt="Caso con più falsi negativi su cartelli piccoli e distanti"
        width="1000">
 </p>
 
-Small and distant traffic signs are frequently missed at score threshold
-`0.5`. This qualitative behavior is consistent with the low fixed-threshold
-recall and the high number of false negatives.
+La scena contiene quattro cartelli reali e nessuna detection sopra soglia.
+
+Gli oggetti sono piccoli e distanti, in linea con la principale difficoltà evidenziata dall'EDA e con i **71 false negative** osservati sul test.
 
 ---
 
-## Interpretation
+## Interpretazione del trasferimento negativo
 
-The experimental pattern supports the following interpretation:
+Il pattern sperimentale è compatibile con un **mismatch tra rappresentazione e task**:
 
-1. The GTSRB classifier is trained on cropped and centered traffic signs.
-2. The detector must find small signs embedded in complete road scenes.
-3. Full classification fine-tuning may specialize the backbone toward crop
-   classification and reduce some generic localization-oriented features.
-4. In Run B, the transferred GTSRB body is combined with a COCO-derived FPN
-   that is also frozen.
-5. Runs C and D allow increasing adaptation and progressively improve the
-   result.
-6. The detection training set contains only 383 images, limiting how much
-   a large unfrozen backbone can be adapted in five epochs.
+1. il classificatore GTSRB vede crop centrati in cui il cartello domina l'immagine;
+2. il detector deve localizzare oggetti piccoli in scene con sfondo complesso;
+3. il full fine-tuning GTSRB può specializzare gli stadi profondi verso la classificazione dei crop;
+4. nella Run B il body GTSRB viene accoppiato a una FPN derivata dal detector COCO e anch'essa congelata;
+5. C e D permettono una crescente ri-adattabilità e migliorano progressivamente;
+6. il training di detection contiene soltanto 383 immagini;
+7. cinque epoche possono essere insufficienti per riadattare decine di milioni di parametri.
 
-This is an interpretation consistent with the observations, not a direct
-causal decomposition.
+Questi punti sono **interpretazioni coerenti con i risultati**, non cause isolate sperimentalmente.
+
+La conclusione corretta rimane circoscritta:
+
+> con questo dataset, questa procedura di trasferimento, Faster R-CNN ResNet-50-FPN e un budget di cinque epoche, l'inizializzazione COCO congelata è nettamente superiore alle configurazioni che trasferiscono il body fine-tuned su GTSRB.
 
 ---
 
-## Project structure
+## Struttura del progetto
 
 ```text
 Exercise3/
-├── analysis/           dataset analysis and class mapping
-├── backbone/           canonical GTSRB ResNet-50 preparation
-├── checks/             adapter, loader, model, transfer and smoke checks
-├── configs/            OmegaConf/YAML configurations
-├── data_pipeline/      loading, adapter, transforms and DataLoaders
-├── evaluation/         mAP and fixed-threshold evaluation
-├── experiments/        A–D matrix and comparison orchestration
-├── models/             Faster R-CNN and strict GTSRB transfer
-├── training/           engine, trainer, checkpoints and W&B
-├── visualization/      ground-truth and prediction visualization
-├── main.py             unified public CLI
+├── analysis/                 # EDA e class mapping
+├── backbone/                 # preparazione backbone GTSRB
+├── configs/                  # configurazioni YAML
+├── data_pipeline/            # dataset adapter, transform e DataLoader
+├── evaluation/               # mAP e diagnostica a soglia fissa
+├── experiments/              # matrice A-D e confronto
+├── models/                   # Faster R-CNN e transfer del backbone
+├── training/                 # training loop, checkpoint e logging
+├── visualization/            # visualizzazione GT e predizioni
+├── inspect_dataset.py
 ├── train_baseline.py
 ├── evaluate_detector.py
 ├── run_experiment_matrix.py
+├── main.py
 ├── README.md
-└── assets/             curated README figures only
+└── assets/
 ```
 
-Large outputs, model checkpoints, W&B caches, dataset caches, logs, and raw
-predictions are intentionally excluded from Git.
+Dataset, checkpoint, output completi, log e cache W&B non vengono versionati.
 
 ---
 
-## Unified CLI
+## Riproduzione
 
-Run commands from the `DLA_LAB1` root:
+L'ambiente condiviso del Laboratorio 1 è definito in [`../environment.yml`](../environment.yml).
+
+Dalla root del repository:
 
 ```bash
-python -m Exercise3.main --help
+conda env create -f DLA_LAB1/environment.yml
+conda activate DLA2026_clean
+cd DLA_LAB1
 ```
 
-Available commands:
-
-```text
-inspect
-eda
-class-mapping
-check
-prepare-backbone
-train
-evaluate
-matrix
-```
-
-Examples:
+### Ispezione del dataset
 
 ```bash
 python -m Exercise3.main inspect --split train
-
-python -m Exercise3.main check \
-  --device cpu \
-  --weights none \
-  --num-workers 0 \
-  --skip-smoke \
-  --skip-gtsrb
-
-python -m Exercise3.main prepare-backbone --validate-only
-
-python -m Exercise3.main matrix \
-  --preflight-only \
-  --device cuda:0 \
-  --num-workers 4 \
-  --no-wandb
 ```
 
----
+### EDA
 
-## Reproduction
+```bash
+python -m Exercise3.main eda
+```
 
-### 1. Prepare the canonical GTSRB backbone
+### Validazione del mapping delle classi
+
+```bash
+python -m Exercise3.main class-mapping
+```
+
+### Preparazione del backbone GTSRB
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python -m Exercise3.main prepare-backbone \
@@ -564,24 +666,21 @@ CUDA_VISIBLE_DEVICES=0 python -m Exercise3.main prepare-backbone \
   --epochs 5
 ```
 
-Expected checkpoint:
+Checkpoint atteso:
 
 ```text
 Exercise3/checkpoints/gtsrb_resnet50_full_linear.pt
 ```
 
-The checkpoint is intentionally excluded from Git.
+Il checkpoint è intenzionalmente escluso da Git.
 
-### 2. Validate strict transfer
+Per validare un checkpoint già preparato senza riaddestrarlo:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python -m Exercise3.checks.validate_gtsrb_transfer \
-  --checkpoint Exercise3/checkpoints/gtsrb_resnet50_full_linear.pt \
-  --required-strategy full \
-  --no-progress
+python -m Exercise3.main prepare-backbone --validate-only
 ```
 
-### 3. Run matrix preflight
+### Preflight della matrice
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python -m Exercise3.main matrix \
@@ -591,7 +690,7 @@ CUDA_VISIBLE_DEVICES=0 python -m Exercise3.main matrix \
   --no-wandb
 ```
 
-### 4. Run the A–D experiment matrix
+### Matrice A–D
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python -m Exercise3.main matrix \
@@ -602,15 +701,9 @@ CUDA_VISIBLE_DEVICES=0 python -m Exercise3.main matrix \
   --no-log-checkpoints
 ```
 
-Do not add:
+Durante questa fase **non deve essere abilitata la valutazione del test per tutte le run**: il test deve rimanere chiuso fino alla selezione del modello.
 
-```text
---evaluate-test-all
-```
-
-The test split must remain closed during model selection.
-
-### 5. Evaluate the selected checkpoint once
+### Test del checkpoint selezionato
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python -m Exercise3.main evaluate \
@@ -623,137 +716,104 @@ CUDA_VISIBLE_DEVICES=0 python -m Exercise3.main evaluate \
 
 ---
 
-## Evaluation protocol
+## Output e tracking
 
-The evaluation module reports:
+La pipeline salva localmente:
 
-- mAP@[0.50:0.95];
-- AP50 and AP75;
-- AP for small, medium and large objects;
-- AR@100;
-- per-class metrics;
-- one-to-one matching at IoU `0.5`;
-- precision, recall, and F1 at score threshold `0.5`;
-- TP, FP, and FN;
-- false positives on empty images;
-- per-image diagnostics;
-- qualitative predictions.
+- configurazioni risolte;
+- history di training e validation;
+- checkpoint best/last quando previsti;
+- metriche COCO-style;
+- diagnostica fixed-threshold;
+- risultati per immagine e per classe;
+- predizioni;
+- figure qualitative;
+- manifest della matrice sperimentale.
 
-The fixed-threshold metrics are not referred to as “accuracy”, because
-object detection must jointly evaluate classification, localization,
-duplicate predictions, false positives, and missed objects.
-
----
-
-## Weights & Biases
-
-The completed study used:
+La matrice finale è stata tracciata anche con **Weights & Biases**.
 
 ```text
 project: dla-lab1
-entity: alepogge-university-of-florence
 group: 20260731_160848_exercise-3-3-backbone-study
 ```
 
-Completed runs:
-
-| Run | Name | W&B ID |
+| Run | Nome | W&B ID |
 |---|---|---|
 | A | `coco-frozen` | `czjaa6cm` |
 | B | `gtsrb-frozen` | `fzriktoy` |
 | C | `gtsrb-layer4` | `7rauu5lc` |
 | D | `gtsrb-layer3-layer4` | `3kfi2wex` |
 
-Training metrics, validation results, comparison tables, qualitative
-images, and final test metrics were logged to W&B.
+---
+
+## Riproducibilità
+
+Il protocollo mantiene:
+
+- seed `42`;
+- split ufficiali invariati;
+- configurazioni YAML;
+- checkpoint per run;
+- stessa procedura di valutazione per A–D;
+- separazione tra validation e test;
+- selezione della singola run sulla validation mAP;
+- apertura del test solo dopo la selezione.
+
+La campagna principale è stata eseguita con una sola seed e non fornisce intervalli di confidenza.
 
 ---
 
-## Reproducibility
+## Limiti
 
-The reference study used:
+- una sola run per configurazione;
+- nessuna stima multi-seed dell'incertezza;
+- solo 383 immagini di training;
+- solo 54 immagini di test;
+- forte sbilanciamento delle classi;
+- due classi assenti dal training;
+- 12 delle 43 classi assenti dal test;
+- solo cinque epoche di training del detector;
+- nessuna augmentation personalizzata;
+- una sola architettura di detection;
+- soglia di score `0.5` non ottimizzata sulla validation;
+- AP per classe talvolta basata su pochissimi oggetti;
+- controllo opzionale COCO con `layer4 + FPN` trainabili non eseguito.
 
-| Component | Version |
-|---|---|
-| Python | 3.12.13 |
-| PyTorch | 2.13.0+cu132 |
-| Torchvision | 0.28.0+cu132 |
-| datasets | 3.6.0 |
-| TorchMetrics | 1.9.0 |
-| pycocotools | 2.0.11 |
-| W&B | 0.28.1 |
-| GPU | NVIDIA GeForce RTX 5090 |
-| Seed | 42 |
-| Git commit | `a14a3f51478ac467534750cf3f0621c93c64f618` |
-
-Study identifier:
-
-```text
-20260731_160848_exercise-3-3-backbone-study
-```
+Questi limiti non annullano il confronto, ma ne restringono la generalizzabilità.
 
 ---
 
-## Limitations
+## Conclusioni
 
-- one run per configuration;
-- no multi-seed uncertainty estimate;
-- only 383 training images;
-- only 54 test images;
-- strong class imbalance;
-- classes absent from training or test;
-- only five detector-training epochs;
-- no custom data augmentation;
-- only Faster R-CNN ResNet-50-FPN;
-- fixed score threshold `0.5` not tuned on validation;
-- per-class AP may depend on very few objects;
-- optional COCO-layer4 control experiment not executed.
+Lo studio produce tre risultati principali.
 
----
+1. **Il trasferimento del body GTSRB è tecnicamente corretto ma non vantaggioso nel protocollo eseguito.**  
+   A parità di congelamento, la Run A COCO raggiunge `mAP = 0.220813`, contro `0.025346` della Run B GTSRB.
 
-## Conclusion
+2. **Lo sblocco progressivo aiuta il backbone GTSRB.**  
+   B → C → D mostra un recupero costante, fino a `mAP = 0.060371`, ma non colma il gap rispetto ad A.
 
-The experiment answers a narrow but reproducible question:
+3. **La migliore configurazione è anche una delle meno costose.**  
+   La Run A utilizza circa 14.7 milioni di parametri trainabili e raggiunge sul test `mAP = 0.228329`.
 
-> With this detection dataset, five-epoch training protocol, and transfer
-> of a classification-fine-tuned ResNet-50 body into a COCO-derived Faster
-> R-CNN/FPN, the frozen COCO initialization was clearly superior.
-
-The GTSRB transfer was technically correct. Progressive unfreezing improved
-its performance, but the GTSRB variants remained below the COCO baseline.
-
-The result highlights that successful classification transfer does not
-automatically imply successful object-detection transfer, especially when
-the source classifier sees centered crops while the detector must localize
-small objects in complex scenes.
+Il risultato evidenzia che un backbone molto efficace nella classificazione di crop centrati non trasferisce automaticamente in modo ottimale a un task di detection, soprattutto quando gli oggetti sono piccoli, il dataset è ridotto e il backbone deve integrarsi con componenti multi-scala già co-adattate su COCO.
 
 ---
 
-## AI Assistance Disclosure
+## Riferimenti e assistenza AI
 
-OpenAI ChatGPT was used to support:
+Riferimenti principali:
 
-- interpretation of the laboratory instructions;
-- modular design and code review;
-- debugging of paths, checkpoint discovery, and experiment orchestration;
-- preparation of validation and reproducibility procedures;
-- organization and revision of the documentation.
-
-All generated code and commands were inspected before use. The experiments
-were executed by the author, and all reported metrics were checked against
-the generated JSON, CSV, logs, checkpoints, and W&B artifacts. The author
-remains responsible for the final implementation and interpretation.
-
----
-
-## References and external resources
-
-- DLA Lab 1 assignment notebook.
-- German Traffic Sign Recognition Benchmark and German Traffic Sign
-  Detection Benchmark.
-- `keremberke/german-traffic-sign-detection` on Hugging Face.
-- PyTorch and Torchvision Faster R-CNN documentation.
-- TorchMetrics `MeanAveragePrecision`.
-- COCO evaluation API and `pycocotools`.
-- OmegaConf.
+- German Traffic Sign Recognition Benchmark;
+- `keremberke/german-traffic-sign-detection`;
+- Faster R-CNN;
+- Feature Pyramid Networks;
+- PyTorch e Torchvision;
+- TorchMetrics `MeanAveragePrecision`;
+- protocollo COCO;
+- OmegaConf;
 - Weights & Biases.
+
+ChatGPT è stato utilizzato come supporto per chiarimenti teorici, progettazione della pipeline, revisione del codice, debugging, organizzazione degli esperimenti, analisi degli artifact e documentazione.
+
+Le proposte generate sono state controllate e adattate; codice, metriche e conclusioni riportate derivano dalle run e dagli artifact effettivamente prodotti.
