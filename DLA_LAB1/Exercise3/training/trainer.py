@@ -1,4 +1,4 @@
-"""Multi-epoch orchestration, local artifacts, checkpointing and resume."""
+"""Multi-epoch training, artifacts, checkpointing and resume."""
 
 from __future__ import annotations
 
@@ -32,7 +32,6 @@ from Exercise3.training.engine import (
     train_one_epoch,
 )
 from Exercise3.training.tracking import ExperimentTracker
-
 
 HISTORY_FIELDS = (
     "epoch",
@@ -72,11 +71,10 @@ HISTORY_FIELDS = (
 
 
 def sanitize_run_name(value: str) -> str:
-    normalized = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip())
-    normalized = normalized.strip("-._")
-    if not normalized:
-        raise ValueError("experiment.run_name becomes empty after sanitization.")
-    return normalized
+    value = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip("-._")
+    if not value:
+        raise ValueError("experiment.run_name is empty after sanitization.")
+    return value
 
 
 def create_run_directory(
@@ -88,51 +86,45 @@ def create_run_directory(
         run_dir = resume_from.resolve().parent
         return run_dir.name, run_dir
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     suffix = (
         sanitize_run_name(configured_name)
-        if configured_name is not None
+        if configured_name
         else "coco-frozen-backbone"
     )
-    run_name = f"{timestamp}_{suffix}"
-    run_dir = output_root / run_name
+    name = f"{datetime.now():%Y%m%d_%H%M%S_%f}_{suffix}"
+    run_dir = output_root / name
     run_dir.mkdir(parents=True, exist_ok=False)
-    return run_name, run_dir
+    return name, run_dir
 
 
-def build_optimizer(model: nn.Module, config: BaselineTrainingConfig) -> Optimizer:
-    named_trainable = [
+def build_optimizer(
+    model: nn.Module,
+    config: BaselineTrainingConfig,
+) -> Optimizer:
+    trainable = [
         (name, parameter)
         for name, parameter in model.named_parameters()
         if parameter.requires_grad
     ]
-    if not named_trainable:
+    if not trainable:
         raise ValueError("The model has no trainable parameters.")
 
-    backbone_parameters = [
-        parameter
-        for name, parameter in named_trainable
-        if name.startswith("backbone.")
-    ]
-    detector_parameters = [
-        parameter
-        for name, parameter in named_trainable
-        if not name.startswith("backbone.")
-    ]
-    if not detector_parameters:
-        raise ValueError("RPN/RoI detector parameters are unexpectedly empty.")
+    backbone = [p for name, p in trainable if name.startswith("backbone.")]
+    detector = [p for name, p in trainable if not name.startswith("backbone.")]
+    if not detector:
+        raise ValueError("Detector parameters are unexpectedly empty.")
 
-    groups: list[dict[str, Any]] = [
+    groups = [
         {
-            "params": detector_parameters,
+            "params": detector,
             "lr": config.optimizer.learning_rate,
             "group_name": "detector",
         }
     ]
-    if backbone_parameters:
+    if backbone:
         groups.append(
             {
-                "params": backbone_parameters,
+                "params": backbone,
                 "lr": config.optimizer.backbone_learning_rate,
                 "group_name": "backbone",
             }
@@ -143,25 +135,21 @@ def build_optimizer(model: nn.Module, config: BaselineTrainingConfig) -> Optimiz
         momentum=config.optimizer.momentum,
         weight_decay=config.optimizer.weight_decay,
     )
-    optimizer_ids = {
-        id(parameter)
-        for group in optimizer.param_groups
-        for parameter in group["params"]
+    expected = {id(p) for _, p in trainable}
+    actual = {
+        id(p) for group in optimizer.param_groups for p in group["params"]
     }
-    expected_ids = {id(parameter) for _, parameter in named_trainable}
-    if optimizer_ids != expected_ids:
-        raise ValueError("Optimizer groups do not match trainable parameters.")
-    if sum(len(group["params"]) for group in optimizer.param_groups) != len(expected_ids):
-        raise ValueError("A trainable parameter appears in more than one optimizer group.")
+    if actual != expected or sum(
+        len(group["params"]) for group in optimizer.param_groups
+    ) != len(expected):
+        raise ValueError("Optimizer groups do not exactly match trainable parameters.")
     return optimizer
 
 
-def _group_learning_rate(optimizer: Optimizer, group_name: str) -> float | None:
+def _lr(optimizer: Optimizer, group_name: str) -> float | None:
     for group in optimizer.param_groups:
         if group.get("group_name") == group_name:
             return float(group["lr"])
-    # Backward compatibility for old frozen-backbone checkpoints, whose only
-    # optimizer group did not yet store group_name.
     if group_name == "detector" and len(optimizer.param_groups) == 1:
         return float(optimizer.param_groups[0]["lr"])
     return None
@@ -178,49 +166,58 @@ def build_scheduler(
     )
 
 
-def _atomic_write_text(path: Path, text: str) -> None:
+def _atomic_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(text, encoding="utf-8")
-    os.replace(temporary, path)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def save_history(history: list[dict[str, Any]], run_dir: Path) -> None:
-    _atomic_write_text(
+    _atomic_text(
         run_dir / "history.json",
         json.dumps(history, indent=2, ensure_ascii=False),
     )
-    csv_path = run_dir / "history.csv"
-    temporary = csv_path.with_name(csv_path.name + ".tmp")
-    with temporary.open("w", newline="", encoding="utf-8") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=list(HISTORY_FIELDS))
+    path = run_dir / "history.csv"
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(HISTORY_FIELDS))
         writer.writeheader()
         writer.writerows(history)
-    os.replace(temporary, csv_path)
+    os.replace(tmp, path)
 
 
-def _epoch_record(
-    *,
+def _record(
     epoch: int,
-    learning_rate: float,
-    backbone_learning_rate: float | None,
-    next_learning_rate: float,
-    next_backbone_learning_rate: float | None,
+    lr: float,
+    backbone_lr: float | None,
+    next_lr: float,
+    next_backbone_lr: float | None,
     train: EpochLossMetrics,
     validation: EpochLossMetrics,
     is_best: bool,
 ) -> dict[str, Any]:
     return {
         "epoch": epoch,
-        "learning_rate": learning_rate,
-        "backbone_learning_rate": backbone_learning_rate,
-        "next_learning_rate": next_learning_rate,
-        "next_backbone_learning_rate": next_backbone_learning_rate,
-        **{f"train_{key}": value for key, value in train.to_dict().items() if key != "split"},
+        "learning_rate": lr,
+        "backbone_learning_rate": backbone_lr,
+        "next_learning_rate": next_lr,
+        "next_backbone_learning_rate": next_backbone_lr,
+        **{
+            f"train_{key}": value
+            for key, value in train.to_dict().items()
+            if key != "split"
+        },
         **{
             f"validation_{key}": value
             for key, value in validation.to_dict().items()
-            if key not in {"split", "optimizer_steps", "amp_skipped_steps", "gradient_clip_norm"}
+            if key
+            not in {
+                "split",
+                "optimizer_steps",
+                "amp_skipped_steps",
+                "gradient_clip_norm",
+            }
         },
         "is_best": is_best,
     }
@@ -231,22 +228,7 @@ def print_epoch_summary(record: dict[str, Any]) -> None:
         f"Epoch {record['epoch']}: "
         f"train_loss={record['train_total_loss']:.6f}, "
         f"validation_loss={record['validation_total_loss']:.6f}, "
-        f"lr={record['learning_rate']:.6g}, "
-        f"best={record['is_best']}"
-    )
-    print(
-        "  train components: "
-        f"classifier={record['train_loss_classifier']:.6f}, "
-        f"box={record['train_loss_box_reg']:.6f}, "
-        f"objectness={record['train_loss_objectness']:.6f}, "
-        f"rpn_box={record['train_loss_rpn_box_reg']:.6f}"
-    )
-    print(
-        "  validation components: "
-        f"classifier={record['validation_loss_classifier']:.6f}, "
-        f"box={record['validation_loss_box_reg']:.6f}, "
-        f"objectness={record['validation_loss_objectness']:.6f}, "
-        f"rpn_box={record['validation_loss_rpn_box_reg']:.6f}"
+        f"lr={record['learning_rate']:.6g}, best={record['is_best']}"
     )
 
 
@@ -266,12 +248,9 @@ def fit_detector(
     resume_checkpoint: dict[str, Any] | None,
 ) -> dict[str, Any]:
     history: list[dict[str, Any]] = []
-    start_epoch = 1
-    global_step = 0
-    best_metric = math.inf
-    best_epoch = 0
+    start_epoch, global_step, best_metric, best_epoch = 1, 0, math.inf, 0
 
-    if resume_checkpoint is not None:
+    if resume_checkpoint:
         restore_training_state(
             checkpoint=resume_checkpoint,
             model=model,
@@ -288,20 +267,21 @@ def fit_detector(
 
     if start_epoch > config.training.epochs:
         raise ValueError(
-            f"Checkpoint already completed epoch {start_epoch - 1}, but "
-            f"training.epochs={config.training.epochs}. Increase the target."
+            f"Checkpoint completed epoch {start_epoch - 1}; "
+            f"training.epochs={config.training.epochs}."
         )
 
     best_path = run_dir / "best_model.pt"
     last_path = run_dir / "last_checkpoint.pt"
-    fit_start = time.perf_counter()
+    start = time.perf_counter()
 
     for epoch in range(start_epoch, config.training.epochs + 1):
-        current_lr = _group_learning_rate(optimizer, "detector")
+        current_lr = _lr(optimizer, "detector")
         if current_lr is None:
             raise RuntimeError("Detector optimizer group is missing.")
-        current_backbone_lr = _group_learning_rate(optimizer, "backbone")
-        train_metrics, global_step = train_one_epoch(
+        current_backbone_lr = _lr(optimizer, "backbone")
+
+        train, global_step = train_one_epoch(
             model=model,
             loader=train_loader,
             optimizer=optimizer,
@@ -316,7 +296,7 @@ def fit_detector(
             max_batches=config.training.max_train_batches,
             batch_logger=tracker.log_batch,
         )
-        validation_metrics = evaluate_validation_loss(
+        validation = evaluate_validation_loss(
             model=model,
             loader=validation_loader,
             device=device,
@@ -326,26 +306,25 @@ def fit_detector(
             max_batches=config.training.max_validation_batches,
         )
 
-        monitored = validation_metrics.total_loss
-        is_best = monitored < best_metric
+        is_best = validation.total_loss < best_metric
         if is_best:
-            best_metric = monitored
-            best_epoch = epoch
+            best_metric, best_epoch = validation.total_loss, epoch
 
         scheduler.step()
-        next_lr = _group_learning_rate(optimizer, "detector")
+        next_lr = _lr(optimizer, "detector")
         if next_lr is None:
             raise RuntimeError("Detector optimizer group disappeared.")
-        next_backbone_lr = _group_learning_rate(optimizer, "backbone")
-        record = _epoch_record(
-            epoch=epoch,
-            learning_rate=current_lr,
-            backbone_learning_rate=current_backbone_lr,
-            next_learning_rate=next_lr,
-            next_backbone_learning_rate=next_backbone_lr,
-            train=train_metrics,
-            validation=validation_metrics,
-            is_best=is_best,
+        next_backbone_lr = _lr(optimizer, "backbone")
+
+        record = _record(
+            epoch,
+            current_lr,
+            current_backbone_lr,
+            next_lr,
+            next_backbone_lr,
+            train,
+            validation,
+            is_best,
         )
         history.append(record)
         save_history(history, run_dir)
@@ -376,12 +355,12 @@ def fit_detector(
                 "backbone_learning_rate": current_backbone_lr,
                 **{
                     f"train_epoch_{key}": value
-                    for key, value in train_metrics.to_dict().items()
+                    for key, value in train.to_dict().items()
                     if key != "split"
                 },
                 **{
                     f"validation_{key}": value
-                    for key, value in validation_metrics.to_dict().items()
+                    for key, value in validation.to_dict().items()
                     if key != "split"
                 },
                 "best_validation_total_loss": best_metric,
@@ -390,7 +369,7 @@ def fit_detector(
         )
         print_epoch_summary(record)
 
-    duration = time.perf_counter() - fit_start
+    duration = time.perf_counter() - start
     summary = {
         "run_name": run_name,
         "run_dir": str(run_dir),
@@ -400,7 +379,9 @@ def fit_detector(
         "global_step": global_step,
         "duration_seconds": duration,
         "best_checkpoint": str(best_path),
-        "last_checkpoint": str(last_path) if config.checkpoint.save_last else None,
+        "last_checkpoint": (
+            str(last_path) if config.checkpoint.save_last else None
+        ),
         "limited_train_batches": config.training.max_train_batches,
         "limited_validation_batches": config.training.max_validation_batches,
         "scientific_run": (
@@ -410,7 +391,7 @@ def fit_detector(
         "test_evaluated": False,
         "wandb_run_id": tracker.run_id,
     }
-    _atomic_write_text(
+    _atomic_text(
         run_dir / "run_summary.json",
         json.dumps(summary, indent=2, ensure_ascii=False),
     )
@@ -433,6 +414,7 @@ def build_runtime_metadata(
     loader_settings: dict[str, Any],
     dataset_metadata: dict[str, Any],
 ) -> dict[str, Any]:
+    index = 0 if device.index is None else device.index
     return {
         "python_version": platform.python_version(),
         "pytorch_version": torch.__version__,
@@ -440,9 +422,7 @@ def build_runtime_metadata(
         "device": str(device),
         "cuda_available": torch.cuda.is_available(),
         "cuda_device_name": (
-            torch.cuda.get_device_name(0 if device.index is None else device.index)
-            if device.type == "cuda"
-            else None
+            torch.cuda.get_device_name(index) if device.type == "cuda" else None
         ),
         "model": model_metadata,
         "loader_settings": loader_settings,

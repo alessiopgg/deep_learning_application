@@ -1,9 +1,4 @@
-"""Unified command-line entry point for Exercise 3.
-
-This module provides one public CLI while keeping the implementation
-of dataset inspection, validation, backbone preparation, training,
-evaluation and experiment orchestration in their dedicated modules.
-"""
+"""Unified CLI for Exercise 3."""
 
 from __future__ import annotations
 
@@ -11,125 +6,63 @@ import argparse
 import subprocess
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass
 
-
-@dataclass(frozen=True)
-class CommandSpec:
-    """Describe a command delegated to another Exercise3 module."""
-
-    module: str
-    description: str
-
-
-COMMANDS: dict[str, CommandSpec] = {
-    "inspect": CommandSpec(
-        module="Exercise3.inspect_dataset",
-        description="Load and inspect the detection dataset.",
+COMMANDS = {
+    "inspect": ("Exercise3.inspect_dataset", "Inspect the detection dataset."),
+    "eda": ("Exercise3.analysis.eda", "Run exploratory data analysis."),
+    "class-mapping": (
+        "Exercise3.analysis.class_mapping",
+        "Validate the detection-to-GTSRB class mapping.",
     ),
-    "eda": CommandSpec(
-        module="Exercise3.analysis.eda",
-        description="Run exploratory data analysis.",
+    "check": ("Exercise3.checks.run_all", "Run the Exercise 3 validation suite."),
+    "prepare-backbone": (
+        "Exercise3.backbone.prepare",
+        "Train and publish the canonical GTSRB ResNet-50.",
     ),
-    "class-mapping": CommandSpec(
-        module="Exercise3.analysis.class_mapping",
-        description="Validate the detection-to-GTSRB class mapping.",
-    ),
-    "check": CommandSpec(
-        module="Exercise3.checks.run_all",
-        description="Run the ordered Exercise 3 validation suite.",
-    ),
-    "prepare-backbone": CommandSpec(
-        module="Exercise3.backbone.prepare",
-        description="Train and publish the canonical GTSRB ResNet-50.",
-    ),
-    "train": CommandSpec(
-        module="Exercise3.train_baseline",
-        description="Train one Faster R-CNN detector configuration.",
-    ),
-    "evaluate": CommandSpec(
-        module="Exercise3.evaluate_detector",
-        description="Evaluate a detector checkpoint.",
-    ),
-    "matrix": CommandSpec(
-        module="Exercise3.run_experiment_matrix",
-        description="Run or resume the A-D experiment matrix.",
+    "train": ("Exercise3.train_baseline", "Train one Faster R-CNN configuration."),
+    "evaluate": ("Exercise3.evaluate_detector", "Evaluate a detector checkpoint."),
+    "matrix": (
+        "Exercise3.run_experiment_matrix",
+        "Run or resume the A-D experiment matrix.",
     ),
 }
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the top-level parser used only to select a command."""
-
-    command_lines = "\n".join(
-        f"  {name:<18} {spec.description}"
-        for name, spec in COMMANDS.items()
+    commands = "\n".join(
+        f"  {name:<18} {description}"
+        for name, (_, description) in COMMANDS.items()
     )
-
     return argparse.ArgumentParser(
         prog="python -m Exercise3.main",
         description=(
-            "Unified entry point for Exercise 3. Arguments written after "
-            "the command are forwarded unchanged to the selected module."
+            "Unified Exercise 3 entry point. Arguments after the command are "
+            "forwarded unchanged to the selected module."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "Available commands:\n"
-            f"{command_lines}\n\n"
-            "Examples:\n"
-            "  python -m Exercise3.main inspect --split train\n"
-            "  python -m Exercise3.main check --skip-smoke\n"
-            "  python -m Exercise3.main prepare-backbone --dry-run\n"
-            "  python -m Exercise3.main train "
-            "--config Exercise3/configs/baseline.yaml\n"
-            "  python -m Exercise3.main evaluate --help\n"
-            "  python -m Exercise3.main matrix --preflight-only --no-wandb"
-        ),
+        epilog=f"Available commands:\n{commands}",
     )
-
-
-def run_module(module: str, arguments: Sequence[str]) -> int:
-    """Execute an Exercise3 module in an isolated Python subprocess."""
-
-    command = [
-        sys.executable,
-        "-m",
-        module,
-        *arguments,
-    ]
-
-    print("$ " + " ".join(command), flush=True)
-    completed_process = subprocess.run(
-        command,
-        check=False,
-    )
-    return int(completed_process.returncode)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Select a command and forward the remaining arguments."""
-
-    arguments = list(sys.argv[1:] if argv is None else argv)
+    args = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
-
-    if not arguments or arguments[0] in {"-h", "--help"}:
+    if not args or args[0] in {"-h", "--help"}:
         parser.print_help()
         return 0
 
-    command_name = arguments[0]
-    command_spec = COMMANDS.get(command_name)
-
-    if command_spec is None:
-        available = ", ".join(COMMANDS)
+    command = COMMANDS.get(args[0])
+    if command is None:
         parser.error(
-            f"unknown command {command_name!r}. "
-            f"Available commands: {available}"
+            f"unknown command {args[0]!r}. Available: {', '.join(COMMANDS)}"
         )
 
-    return run_module(
-        command_spec.module,
-        arguments[1:],
+    module, _ = command
+    process = subprocess.run(
+        [sys.executable, "-m", module, *args[1:]],
+        check=False,
     )
+    return int(process.returncode)
 
 
 if __name__ == "__main__":

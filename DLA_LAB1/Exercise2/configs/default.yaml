@@ -32,11 +32,6 @@ checkpoint:
 logging:
   batch_interval: 50
 
-tracking:
-  use_wandb: false
-  project: dla-lab1
-  group: exercise-2
-
 experiment:
   seed: 42
   device: auto

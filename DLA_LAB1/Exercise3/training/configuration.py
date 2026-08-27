@@ -1,4 +1,4 @@
-"""OmegaConf configuration for Exercise 3.3 detector training."""
+"""OmegaConf configuration for Exercise 3 detector training."""
 
 from __future__ import annotations
 
@@ -8,10 +8,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import OmegaConf
 
 from Exercise3.paths import EXERCISE_DIR, OUTPUT_DIR
-
 
 DEFAULT_CONFIG_PATH = EXERCISE_DIR / "configs" / "baseline.yaml"
 
@@ -39,7 +38,6 @@ class ModelConfig:
     gtsrb_checkpoint: str | None = None
     required_gtsrb_strategy: str | None = "full"
     trainable_backbone: str = "frozen"
-    # Backward-compatible alias. It must agree with trainable_backbone.
     freeze_backbone: bool = True
     num_classes: int = 44
     progress: bool = True
@@ -48,9 +46,7 @@ class ModelConfig:
 @dataclass
 class OptimizerConfig:
     name: str = "sgd"
-    # Detector heads / RPN learning rate.
     learning_rate: float = 0.005
-    # Used only when layer3/layer4/FPN are trainable.
     backbone_learning_rate: float = 0.0001
     momentum: float = 0.9
     weight_decay: float = 0.0005
@@ -120,21 +116,14 @@ def parse_config_arguments(
     arguments: Sequence[str] | None = None,
 ) -> tuple[Path, list[str]]:
     parser = argparse.ArgumentParser(
-        description="Train the Exercise 3.3 Faster R-CNN detector.",
-        add_help=True,
+        description="Train the Exercise 3.3 Faster R-CNN detector."
     )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=DEFAULT_CONFIG_PATH,
-        help="YAML configuration file.",
-    )
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     parsed, overrides = parser.parse_known_args(arguments)
-    invalid = [item for item in overrides if "=" not in item]
+    invalid = [value for value in overrides if "=" not in value]
     if invalid:
         raise ValueError(
-            "Unknown arguments must be OmegaConf dot-list overrides of the "
-            f"form key=value. Invalid: {invalid}."
+            f"Overrides must use key=value syntax. Invalid: {invalid}"
         )
     return parsed.config, overrides
 
@@ -143,121 +132,90 @@ def load_training_config(
     config_path: Path,
     overrides: Sequence[str] | None = None,
 ) -> BaselineTrainingConfig:
-    resolved_path = config_path.expanduser()
-    if not resolved_path.is_absolute():
-        resolved_path = Path.cwd() / resolved_path
-    if not resolved_path.exists():
-        raise FileNotFoundError(f"Configuration file not found: {resolved_path}")
+    path = config_path.expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    if not path.is_file():
+        raise FileNotFoundError(f"Configuration file not found: {path}")
 
-    schema = OmegaConf.structured(BaselineTrainingConfig)
-    yaml_config = OmegaConf.load(resolved_path)
-    override_config = OmegaConf.from_dotlist(list(overrides or []))
-    merged: DictConfig = OmegaConf.merge(schema, yaml_config, override_config)
+    merged = OmegaConf.merge(
+        OmegaConf.structured(BaselineTrainingConfig),
+        OmegaConf.load(path),
+        OmegaConf.from_dotlist(list(overrides or [])),
+    )
     OmegaConf.resolve(merged)
-
     config = OmegaConf.to_object(merged)
     if not isinstance(config, BaselineTrainingConfig):
-        raise TypeError("OmegaConf did not produce BaselineTrainingConfig.")
+        raise TypeError("Invalid structured configuration.")
     validate_training_config(config)
     return config
 
 
 def validate_training_config(config: BaselineTrainingConfig) -> None:
-    if config.data.train_batch_size <= 0:
-        raise ValueError("data.train_batch_size must be greater than zero.")
-    if config.data.evaluation_batch_size <= 0:
-        raise ValueError("data.evaluation_batch_size must be greater than zero.")
-    if config.data.num_workers < 0:
-        raise ValueError("data.num_workers cannot be negative.")
-    if config.data.persistent_workers and config.data.num_workers == 0:
-        raise ValueError(
-            "data.persistent_workers=true requires data.num_workers > 0."
-        )
+    d, m, o, s, t, c, w, e = (
+        config.data,
+        config.model,
+        config.optimizer,
+        config.scheduler,
+        config.training,
+        config.checkpoint,
+        config.tracking,
+        config.experiment,
+    )
 
-    if config.model.architecture != "fasterrcnn_resnet50_fpn":
-        raise ValueError(
-            "Only model.architecture=fasterrcnn_resnet50_fpn is supported."
-        )
-    if config.model.weights not in {"coco", "none"}:
+    if d.train_batch_size <= 0 or d.evaluation_batch_size <= 0:
+        raise ValueError("data batch sizes must be > 0.")
+    if d.num_workers < 0:
+        raise ValueError("data.num_workers cannot be negative.")
+    if d.persistent_workers and d.num_workers == 0:
+        raise ValueError("persistent_workers requires num_workers > 0.")
+
+    if m.architecture != "fasterrcnn_resnet50_fpn":
+        raise ValueError("Only fasterrcnn_resnet50_fpn is supported.")
+    if m.weights not in {"coco", "none"}:
         raise ValueError("model.weights must be coco or none.")
-    if config.model.backbone_source not in {"coco", "gtsrb"}:
+    if m.backbone_source not in {"coco", "gtsrb"}:
         raise ValueError("model.backbone_source must be coco or gtsrb.")
-    if config.model.trainable_backbone not in {
-        "frozen",
-        "layer4",
-        "layer3_layer4",
-    }:
-        raise ValueError(
-            "model.trainable_backbone must be frozen, layer4 or layer3_layer4."
-        )
-    expected_freeze = config.model.trainable_backbone == "frozen"
-    if config.model.freeze_backbone != expected_freeze:
-        raise ValueError(
-            "model.freeze_backbone conflicts with model.trainable_backbone."
-        )
-    if config.model.backbone_source == "gtsrb" and not config.model.gtsrb_checkpoint:
-        raise ValueError(
-            "model.backbone_source=gtsrb requires model.gtsrb_checkpoint."
-        )
-    if config.model.backbone_source == "gtsrb" and config.model.weights != "coco":
-        raise ValueError(
-            "GTSRB runs must retain COCO initialization for FPN/RPN/RoI heads."
-        )
-    if config.model.num_classes != 44:
+    if m.trainable_backbone not in {"frozen", "layer4", "layer3_layer4"}:
+        raise ValueError("Invalid model.trainable_backbone.")
+    if m.freeze_backbone != (m.trainable_backbone == "frozen"):
+        raise ValueError("freeze_backbone conflicts with trainable_backbone.")
+    if m.backbone_source == "gtsrb":
+        if not m.gtsrb_checkpoint:
+            raise ValueError("GTSRB backbone requires model.gtsrb_checkpoint.")
+        if m.weights != "coco":
+            raise ValueError("GTSRB runs must retain COCO detector weights.")
+    if m.num_classes != 44:
         raise ValueError("The verified detector taxonomy requires 44 classes.")
 
-    if config.optimizer.name != "sgd":
+    if o.name != "sgd":
         raise ValueError("optimizer.name must be sgd.")
-    if config.optimizer.learning_rate <= 0:
-        raise ValueError("optimizer.learning_rate must be greater than zero.")
-    if config.optimizer.backbone_learning_rate <= 0:
-        raise ValueError(
-            "optimizer.backbone_learning_rate must be greater than zero."
-        )
-    if config.optimizer.backbone_learning_rate > config.optimizer.learning_rate:
-        raise ValueError(
-            "optimizer.backbone_learning_rate cannot exceed detector LR."
-        )
-    if not 0 <= config.optimizer.momentum < 1:
-        raise ValueError("optimizer.momentum must satisfy 0 <= momentum < 1.")
-    if config.optimizer.weight_decay < 0:
-        raise ValueError("optimizer.weight_decay cannot be negative.")
+    if o.learning_rate <= 0 or o.backbone_learning_rate <= 0:
+        raise ValueError("Optimizer learning rates must be > 0.")
+    if o.backbone_learning_rate > o.learning_rate:
+        raise ValueError("Backbone LR cannot exceed detector LR.")
+    if not 0 <= o.momentum < 1 or o.weight_decay < 0:
+        raise ValueError("Invalid optimizer momentum or weight decay.")
 
-    if config.scheduler.name != "step_lr":
-        raise ValueError("scheduler.name must be step_lr.")
-    if config.scheduler.step_size <= 0:
-        raise ValueError("scheduler.step_size must be greater than zero.")
-    if not 0 < config.scheduler.gamma <= 1:
-        raise ValueError("scheduler.gamma must satisfy 0 < gamma <= 1.")
+    if s.name != "step_lr" or s.step_size <= 0 or not 0 < s.gamma <= 1:
+        raise ValueError("Invalid StepLR configuration.")
 
-    if config.training.epochs <= 0:
-        raise ValueError("training.epochs must be greater than zero.")
-    if config.training.amp_initial_scale <= 0:
-        raise ValueError("training.amp_initial_scale must be greater than zero.")
-    if (
-        config.training.gradient_clip_norm is not None
-        and config.training.gradient_clip_norm <= 0
-    ):
-        raise ValueError(
-            "training.gradient_clip_norm must be null or greater than zero."
-        )
-    if config.training.logging_interval <= 0:
-        raise ValueError("training.logging_interval must be greater than zero.")
-    for name, value in (
-        ("max_train_batches", config.training.max_train_batches),
-        ("max_validation_batches", config.training.max_validation_batches),
-    ):
+    if t.epochs <= 0 or t.amp_initial_scale <= 0 or t.logging_interval <= 0:
+        raise ValueError("Invalid training epochs/AMP scale/logging interval.")
+    if t.gradient_clip_norm is not None and t.gradient_clip_norm <= 0:
+        raise ValueError("gradient_clip_norm must be null or > 0.")
+    for name in ("max_train_batches", "max_validation_batches"):
+        value = getattr(t, name)
         if value is not None and value <= 0:
-            raise ValueError(f"training.{name} must be null or greater than zero.")
+            raise ValueError(f"training.{name} must be null or > 0.")
 
-    if config.checkpoint.monitor != "validation_total_loss":
-        raise ValueError("checkpoint.monitor must be validation_total_loss.")
-    if config.checkpoint.mode != "min":
-        raise ValueError("validation_total_loss requires checkpoint.mode=min.")
-
-    if config.tracking.mode not in {"online", "offline", "disabled"}:
+    if c.monitor != "validation_total_loss" or c.mode != "min":
+        raise ValueError(
+            "Checkpoint selection must minimize validation_total_loss."
+        )
+    if w.mode not in {"online", "offline", "disabled"}:
         raise ValueError("tracking.mode must be online, offline or disabled.")
-    if config.experiment.seed < 0:
+    if e.seed < 0:
         raise ValueError("experiment.seed must be non-negative.")
 
 
@@ -267,17 +225,17 @@ def resolve_exercise_path(value: str | Path) -> Path:
 
 
 def resolve_cache_dir(config: BaselineTrainingConfig) -> Path | None:
-    if config.paths.cache_dir is None:
-        return None
-    return resolve_exercise_path(config.paths.cache_dir)
+    return (
+        None
+        if config.paths.cache_dir is None
+        else resolve_exercise_path(config.paths.cache_dir)
+    )
 
 
 def resolve_output_root(config: BaselineTrainingConfig) -> Path:
     path = resolve_exercise_path(config.paths.output_dir)
     if path == OUTPUT_DIR:
-        raise ValueError(
-            "paths.output_dir must identify a run collection below outputs/."
-        )
+        raise ValueError("paths.output_dir must be below outputs/.")
     return path
 
 
@@ -286,15 +244,14 @@ def save_resolved_config(
     run_dir: Path,
 ) -> tuple[Path, Path]:
     run_dir.mkdir(parents=True, exist_ok=True)
-    config_dict = config.to_dict()
-    yaml_path = run_dir / "config.yaml"
-    json_path = run_dir / "config.json"
+    data = config.to_dict()
+    yaml_path, json_path = run_dir / "config.yaml", run_dir / "config.json"
     yaml_path.write_text(
-        OmegaConf.to_yaml(OmegaConf.create(config_dict), resolve=True),
+        OmegaConf.to_yaml(OmegaConf.create(data), resolve=True),
         encoding="utf-8",
     )
     json_path.write_text(
-        json.dumps(config_dict, indent=2, ensure_ascii=False),
+        json.dumps(data, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
     return yaml_path, json_path
@@ -304,15 +261,11 @@ def validate_resume_compatibility(
     current: BaselineTrainingConfig,
     checkpoint_config: dict[str, Any],
 ) -> None:
-    current_dict = current.to_dict()
-    for key in ("data", "model", "optimizer", "scheduler"):
-        if checkpoint_config.get(key) != current_dict.get(key):
-            raise ValueError(
-                f"Resume configuration mismatch in section {key!r}."
-            )
+    current_config = current.to_dict()
+    for section in ("data", "model", "optimizer", "scheduler"):
+        if checkpoint_config.get(section) != current_config.get(section):
+            raise ValueError(f"Resume mismatch in section {section!r}.")
 
-    checkpoint_training = checkpoint_config.get("training", {})
-    current_training = current_dict["training"]
     for key in (
         "amp",
         "amp_initial_scale",
@@ -320,14 +273,13 @@ def validate_resume_compatibility(
         "max_train_batches",
         "max_validation_batches",
     ):
-        if checkpoint_training.get(key) != current_training.get(key):
-            raise ValueError(
-                f"Resume configuration mismatch for training.{key}."
-            )
+        if checkpoint_config.get("training", {}).get(key) != getattr(
+            current.training, key
+        ):
+            raise ValueError(f"Resume mismatch for training.{key}.")
 
-    checkpoint_experiment = checkpoint_config.get("experiment", {})
     for key in ("seed", "deterministic"):
-        if checkpoint_experiment.get(key) != current_dict["experiment"].get(key):
-            raise ValueError(
-                f"Resume configuration mismatch for experiment.{key}."
-            )
+        if checkpoint_config.get("experiment", {}).get(key) != getattr(
+            current.experiment, key
+        ):
+            raise ValueError(f"Resume mismatch for experiment.{key}.")

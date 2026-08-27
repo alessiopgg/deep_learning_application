@@ -1,4 +1,4 @@
-"""Atomic checkpoints and exact-resume state for Exercise 3 training."""
+"""Atomic checkpoint persistence with exact resume state."""
 
 from __future__ import annotations
 
@@ -15,22 +15,19 @@ from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.data import DataLoader
 
 
-def _move_to_cpu(value: Any) -> Any:
+def _cpu(value: Any) -> Any:
     if torch.is_tensor(value):
         return value.detach().cpu()
     if isinstance(value, dict):
-        return {key: _move_to_cpu(item) for key, item in value.items()}
+        return {key: _cpu(item) for key, item in value.items()}
     if isinstance(value, list):
-        return [_move_to_cpu(item) for item in value]
+        return [_cpu(item) for item in value]
     if isinstance(value, tuple):
-        return tuple(_move_to_cpu(item) for item in value)
+        return tuple(_cpu(item) for item in value)
     return value
 
 
-def capture_rng_state(train_loader: DataLoader) -> dict[str, Any]:
-    generator_state = None
-    if train_loader.generator is not None:
-        generator_state = train_loader.generator.get_state()
+def capture_rng_state(loader: DataLoader) -> dict[str, Any]:
     return {
         "python": random.getstate(),
         "numpy": np.random.get_state(),
@@ -38,24 +35,27 @@ def capture_rng_state(train_loader: DataLoader) -> dict[str, Any]:
         "torch_cuda": (
             torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
         ),
-        "train_loader_generator": generator_state,
+        "train_loader_generator": (
+            loader.generator.get_state() if loader.generator is not None else None
+        ),
     }
 
 
-def restore_rng_state(state: dict[str, Any], train_loader: DataLoader) -> None:
+def restore_rng_state(state: dict[str, Any], loader: DataLoader) -> None:
     random.setstate(state["python"])
     np.random.set_state(state["numpy"])
     torch.set_rng_state(state["torch_cpu"])
     if state.get("torch_cuda") is not None and torch.cuda.is_available():
         torch.cuda.set_rng_state_all(state["torch_cuda"])
+
     generator_state = state.get("train_loader_generator")
     if generator_state is not None:
-        if train_loader.generator is None:
+        if loader.generator is None:
             raise ValueError(
-                "Checkpoint contains a DataLoader generator state, but the "
-                "current train DataLoader has no generator."
+                "Checkpoint has a DataLoader generator state but current "
+                "loader has no generator."
             )
-        train_loader.generator.set_state(generator_state)
+        loader.generator.set_state(generator_state)
 
 
 def build_checkpoint(
@@ -79,10 +79,10 @@ def build_checkpoint(
         "global_step": global_step,
         "best_metric": best_metric,
         "best_epoch": best_epoch,
-        "model_state_dict": _move_to_cpu(model.state_dict()),
-        "optimizer_state_dict": _move_to_cpu(optimizer.state_dict()),
-        "scheduler_state_dict": _move_to_cpu(scheduler.state_dict()),
-        "scaler_state_dict": _move_to_cpu(scaler.state_dict()),
+        "model_state_dict": _cpu(model.state_dict()),
+        "optimizer_state_dict": _cpu(optimizer.state_dict()),
+        "scheduler_state_dict": _cpu(scheduler.state_dict()),
+        "scaler_state_dict": _cpu(scaler.state_dict()),
         "config": config,
         "history": history,
         "rng_state": capture_rng_state(train_loader),
@@ -92,24 +92,27 @@ def build_checkpoint(
 
 def atomic_save_checkpoint(checkpoint: dict[str, Any], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_name(path.name + ".tmp")
-    torch.save(checkpoint, temporary_path)
-    os.replace(temporary_path, path)
+    temporary = path.with_name(path.name + ".tmp")
+    torch.save(checkpoint, temporary)
+    os.replace(temporary, path)
 
 
-def load_checkpoint(path: Path, map_location: torch.device) -> dict[str, Any]:
-    if not path.exists():
+def load_checkpoint(
+    path: Path,
+    map_location: torch.device,
+) -> dict[str, Any]:
+    if not path.is_file():
         raise FileNotFoundError(f"Checkpoint not found: {path}")
     try:
         checkpoint = torch.load(
-            path,
-            map_location=map_location,
-            weights_only=False,
+            path, map_location=map_location, weights_only=False
         )
     except TypeError:
         checkpoint = torch.load(path, map_location=map_location)
+
     if not isinstance(checkpoint, dict):
         raise TypeError("Checkpoint root must be a dictionary.")
+
     required = {
         "epoch",
         "global_step",
@@ -123,7 +126,7 @@ def load_checkpoint(path: Path, map_location: torch.device) -> dict[str, Any]:
         "history",
         "rng_state",
     }
-    missing = required.difference(checkpoint)
+    missing = required - set(checkpoint)
     if missing:
         raise KeyError(f"Checkpoint is missing fields: {sorted(missing)}.")
     return checkpoint

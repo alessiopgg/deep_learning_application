@@ -1,4 +1,4 @@
-"""CLI entry point for Step 11 Faster R-CNN baseline training."""
+"""Train one Exercise 3.3 Faster R-CNN configuration."""
 
 from __future__ import annotations
 
@@ -48,9 +48,10 @@ def main() -> None:
     config_path, overrides = parse_config_arguments()
     config = load_training_config(config_path, overrides)
     device = resolve_device(config.experiment.device)
-    amp_enabled = config.training.amp and device.type == "cuda"
-    config.training.amp = amp_enabled
-    set_reproducibility(config.experiment.seed, config.experiment.deterministic)
+    config.training.amp = bool(config.training.amp and device.type == "cuda")
+    set_reproducibility(
+        config.experiment.seed, config.experiment.deterministic
+    )
 
     if device.type == "cuda":
         index = 0 if device.index is None else device.index
@@ -59,11 +60,11 @@ def main() -> None:
         torch.cuda.reset_peak_memory_stats(index)
 
     cache_dir = resolve_cache_dir(config)
-    dataset_dict, resolved_cache_dir = load_detection_dataset(
+    dataset, resolved_cache = load_detection_dataset(
         DEFAULT_CACHE_DIR if cache_dir is None else cache_dir
     )
     loaders = build_detection_dataloaders(
-        dataset_dict,
+        dataset,
         train_batch_size=config.data.train_batch_size,
         evaluation_batch_size=config.data.evaluation_batch_size,
         num_workers=config.data.num_workers,
@@ -84,16 +85,16 @@ def main() -> None:
         seed=config.experiment.seed,
         progress=config.model.progress,
     )
-    model, model_metadata = build_faster_rcnn_baseline(model_config)
+    model, metadata = build_faster_rcnn_baseline(model_config)
     model.to(device)
-    model_audit = summarize_faster_rcnn(model, model_metadata)
+    model_audit = summarize_faster_rcnn(model, metadata)
 
     optimizer = build_optimizer(model, config)
     scheduler = build_scheduler(optimizer, config)
     scaler = build_grad_scaler(
         device,
-        enabled=amp_enabled,
-        initial_scale=config.training.amp_initial_scale,
+        config.training.amp,
+        config.training.amp_initial_scale,
     )
 
     resume_path = (
@@ -104,18 +105,17 @@ def main() -> None:
     resume_checkpoint = (
         None if resume_path is None else load_checkpoint(resume_path, device)
     )
-    if resume_checkpoint is not None:
+    if resume_checkpoint:
         validate_resume_compatibility(config, resume_checkpoint["config"])
+
     output_root = resolve_output_root(config)
     output_root.mkdir(parents=True, exist_ok=True)
     run_name, run_dir = create_run_directory(
-        output_root,
-        config.experiment.run_name,
-        resume_path,
+        output_root, config.experiment.run_name, resume_path
     )
     save_resolved_config(config, run_dir)
 
-    runtime_metadata = build_runtime_metadata(
+    runtime = build_runtime_metadata(
         device=device,
         model_metadata=model_audit,
         loader_settings=loaders.settings.to_dict(),
@@ -123,7 +123,7 @@ def main() -> None:
             "repository": DATASET_REPOSITORY,
             "configuration": DATASET_CONFIGURATION,
             "revision": DATASET_REVISION,
-            "resolved_cache_dir": str(resolved_cache_dir),
+            "resolved_cache_dir": str(resolved_cache),
             "train_images": len(loaders.datasets.train),
             "validation_images": len(loaders.datasets.validation),
             "test_images": len(loaders.datasets.test),
@@ -131,15 +131,10 @@ def main() -> None:
         },
     )
     (run_dir / "runtime_metadata.json").write_text(
-        json.dumps(runtime_metadata, indent=2, ensure_ascii=False),
+        json.dumps(runtime, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
 
-    resume_wandb_id = (
-        None
-        if resume_checkpoint is None
-        else resume_checkpoint.get("wandb_run_id")
-    )
     tracker = ExperimentTracker(
         enabled=config.tracking.use_wandb,
         project=config.tracking.project,
@@ -148,21 +143,22 @@ def main() -> None:
         mode=config.tracking.mode,
         run_name=run_name,
         config=config.to_dict(),
-        resume_run_id=resume_wandb_id,
+        resume_run_id=(
+            None
+            if resume_checkpoint is None
+            else resume_checkpoint.get("wandb_run_id")
+        ),
         log_best_checkpoint=config.tracking.log_best_checkpoint,
     )
 
-    print("\n=== Exercise 3.3 - Step 11: baseline training ===")
+    print("\n=== Exercise 3.3 - Faster R-CNN training ===")
     print(f"Run: {run_name}")
-    print(f"Run directory: {run_dir}")
-    print(f"Device: {device}")
-    print(f"AMP enabled: {amp_enabled}")
-    print(f"Epoch target: {config.training.epochs}")
-    print(f"Train batch size: {config.data.train_batch_size}")
-    print(f"Validation batch size: {config.data.evaluation_batch_size}")
-    print(f"Train batches limit: {config.training.max_train_batches}")
-    print(f"Validation batches limit: {config.training.max_validation_batches}")
-    print(f"W&B enabled: {config.tracking.use_wandb}")
+    print(f"Device: {device} | AMP: {config.training.amp}")
+    print(
+        f"Epochs: {config.training.epochs} | "
+        f"train/eval batch: {config.data.train_batch_size}/"
+        f"{config.data.evaluation_batch_size}"
+    )
     print(f"Resume checkpoint: {resume_path}")
     print("Test evaluation during training: False")
 
@@ -194,8 +190,6 @@ def main() -> None:
         f"{summary['best_validation_total_loss']:.6f}"
     )
     print(f"Best checkpoint: {summary['best_checkpoint']}")
-    print(f"Scientific full run: {summary['scientific_run']}")
-    print("Test evaluated: False")
 
 
 if __name__ == "__main__":

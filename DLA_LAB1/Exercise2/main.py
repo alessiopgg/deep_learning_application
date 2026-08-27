@@ -1,112 +1,95 @@
-"""Entry point for the Exercise 2 experimental pipeline."""
+"""Entry point for the compact Exercise 2 training pipeline."""
+
+from datetime import datetime
 
 from configuration import config_to_yaml, load_config
-from data import create_dataloaders, print_data_summary
-from engine import evaluate, print_epoch_metrics, train_one_epoch
-from experiment_paths import create_run_paths
-from models import (
-    create_input_transform,
-    create_model,
-    print_model_summary,
-)
-from optimization import (
+from data import create_dataloaders, print_data_summary, resolve_path
+from models import create_input_transform, create_model, print_model_summary
+from training import (
     create_training_components,
+    describe_device,
+    evaluate,
+    fit,
+    print_epoch_metrics,
     print_optimization_summary,
+    resolve_device,
+    set_reproducibility,
+    train_one_epoch,
 )
-from runtime import describe_device, resolve_device, set_reproducibility
-from training import fit
+
+
+def create_run_directory(config):
+    name = config.experiment.run_name
+    if name is None:
+        name = (
+            f"{config.model.name}-"
+            f"{config.model.fine_tuning_strategy}-"
+            f"{config.model.classifier_type}"
+        )
+    else:
+        name = "".join(c if c.isalnum() or c in "-_" else "-" for c in str(name).strip()).strip("-")
+        if not name:
+            raise ValueError("experiment.run_name must contain a letter or digit.")
+
+    run_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{name}"
+    run_dir = resolve_path(config.paths.output_dir) / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=False)
+    return run_id, run_dir
 
 
 def main() -> None:
-    """Prepare the pipeline and optionally execute a short smoke test."""
     config = load_config()
-
     print("\n=== Exercise 2 configuration ===")
     print(config_to_yaml(config))
 
-    set_reproducibility(
-        seed=config.experiment.seed,
-        deterministic=config.experiment.deterministic,
-    )
+    set_reproducibility(config.experiment.seed, config.experiment.deterministic)
     device = resolve_device(config.experiment.device)
-
     print("=== Exercise 2 runtime ===")
     print(f"Selected device: {describe_device(device)}")
     print(f"Seed: {config.experiment.seed}")
     print(f"Deterministic execution: {config.experiment.deterministic}")
 
     transform = create_input_transform(config.model.name)
-    data_loaders = create_dataloaders(
-        config=config,
-        transform=transform,
-        device=device,
-    )
-    print_data_summary(data_loaders)
+    loaders, data_info = create_dataloaders(config, transform, device)
+    print_data_summary(data_info)
 
-    model_bundle = create_model(
-        config=config,
-        device=device,
-    )
-    print_model_summary(model_bundle)
+    model, model_info = create_model(config, device)
+    print_model_summary(model_info)
+    criterion, optimizer, optimization_info = create_training_components(model, config)
+    print_optimization_summary(optimization_info)
 
-    components = create_training_components(
-        model=model_bundle.model,
-        config=config,
-    )
-    print_optimization_summary(components)
-
-    smoke_test_batches = config.experiment.smoke_test_batches
-    if smoke_test_batches > 0:
-        print(
-            "\nRunning an engine smoke test over "
-            f"{smoke_test_batches} training and validation batch(es)."
-        )
-
+    smoke_batches = int(config.experiment.smoke_test_batches)
+    if smoke_batches > 0:
+        print(f"\nRunning smoke test over {smoke_batches} training and validation batch(es).")
         training_metrics = train_one_epoch(
-            model=model_bundle.model,
-            dataloader=data_loaders.train,
-            criterion=components.criterion,
-            optimizer=components.optimizer,
-            device=device,
-            fine_tuning_strategy=(
-                config.model.fine_tuning_strategy
-            ),
-            log_interval=config.logging.batch_interval,
-            max_batches=smoke_test_batches,
+            model, loaders["train"], criterion, optimizer, device,
+            config.model.fine_tuning_strategy,
+            config.logging.batch_interval,
+            max_batches=smoke_batches,
         )
-        validation_result = evaluate(
-            model=model_bundle.model,
-            dataloader=data_loaders.validation,
-            criterion=components.criterion,
-            device=device,
-            max_batches=smoke_test_batches,
+        validation_metrics, _, _ = evaluate(
+            model, loaders["validation"], criterion, device,
+            max_batches=smoke_batches,
         )
-
-        print_epoch_metrics(
-            "Smoke-test training metrics",
-            training_metrics,
-        )
-        print_epoch_metrics(
-            "Smoke-test validation metrics",
-            validation_result.metrics,
-        )
+        print_epoch_metrics("Smoke-test training metrics", training_metrics)
+        print_epoch_metrics("Smoke-test validation metrics", validation_metrics)
         print("\nEngine smoke test completed successfully.")
         return
 
-    run_paths = create_run_paths(config)
+    run_id, run_dir = create_run_directory(config)
     print("\n=== Exercise 2 run ===")
-    print(f"Run ID: {run_paths.run_id}")
-    print(f"Run directory: {run_paths.run_dir}")
+    print(f"Run ID: {run_id}")
+    print(f"Run directory: {run_dir}")
 
     fit(
-        model=model_bundle.model,
-        train_loader=data_loaders.train,
-        validation_loader=data_loaders.validation,
-        criterion=components.criterion,
-        optimizer=components.optimizer,
-        device=device,
-        config=config,
-        checkpoint_path=run_paths.checkpoint_path,
+        model,
+        loaders["train"],
+        loaders["validation"],
+        criterion,
+        optimizer,
+        device,
+        config,
+        run_dir / "best_model.pt",
     )
 
 
