@@ -22,6 +22,7 @@ Il protocollo sperimentale separa training ed evaluation, utilizza seed controll
 ```text
 DLA_LAB3/
 ├── README.md
+├── environment.yml
 ├── models.py
 ├── reinforce.py
 │
