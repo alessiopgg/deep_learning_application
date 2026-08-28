@@ -5,6 +5,19 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Python / testing caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Python packaging
+build/
+dist/
+*.egg-info/
+
 # ============================================================
 # Virtual environments
 # ============================================================
@@ -12,7 +25,9 @@ __pycache__/
 venv/
 env/
 
+# ============================================================
 # Environment files
+# ============================================================
 .env
 .env.*
 !.env.example
@@ -67,5 +82,7 @@ hf_cache/
 .DS_Store
 Thumbs.db
 
-# Exercise 3 development checks
+# ============================================================
+# Exercise-specific temporary files
+# ============================================================
 DLA_LAB1/Exercise3/checks/
