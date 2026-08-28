@@ -1,44 +1,15 @@
 # Exercise 2 — Variance Reduction in REINFORCE su CartPole-v1
 
-## Panoramica
-
-L'Exercise 2 estende l'implementazione di **REINFORCE** sviluppata
-nell'Exercise 1 introducendo due tecniche di riduzione della varianza del
-policy gradient:
+L'Exercise 2 studia due strategie per ridurre la varianza del learning signal di **REINFORCE** su `CartPole-v1`:
 
 ```text
-standardizzazione dei return
-value baseline appresa
+Standardized Returns
+Learned Value Baseline
 ```
 
-L'ambiente, la PolicyNetwork e il protocollo generale rimangono invariati.
+L'obiettivo è modificare il segnale che pesa la log-probabilità delle azioni senza cambiare il task o l'architettura della policy, e verificare sperimentalmente l'effetto su velocità di apprendimento, stabilità e robustezza finale.
 
-L'obiettivo dell'esercizio non è quindi modificare il problema da risolvere,
-ma verificare sperimentalmente se un segnale di apprendimento meno rumoroso
-permetta di ottenere:
-
-- apprendimento più rapido;
-- maggiore stabilità durante il training;
-- minore dipendenza dalla random seed;
-- minore frequenza di policy collapse;
-- policy finali più robuste.
-
-L'Exercise 1 aveva mostrato che vanilla REINFORCE riesce a risolvere
-`CartPole-v1`, ma presenta una forte variabilità dovuta alla natura Monte Carlo
-del policy gradient.
-
-In particolare, il confronto tra learning rate e training seed aveva portato a
-selezionare:
-
-```text
-learning rate = 0.001
-training episodes = 2000
-```
-
-come configurazione di riferimento più stabile.
-
-L'Exercise 2 utilizza quindi proprio questa configurazione come baseline e
-confronta, a parità di condizioni:
+Il confronto finale considera tre configurazioni:
 
 ```text
 Vanilla REINFORCE
@@ -50,636 +21,167 @@ Learned Value Baseline
 
 ---
 
-# 1. Implementazione
+## Metodo — Variance Reduction in REINFORCE
 
-## Vanilla REINFORCE
+L'Exercise 2 mantiene invariati ambiente e `PolicyNetwork` dell'Exercise 1 e interviene sul **segnale usato per aggiornare la policy**.
 
-La configurazione di riferimento rimane quella dell'Exercise 1.
+Il confronto è:
 
-La PolicyNetwork è:
+| Metodo | Segnale usato nella policy loss |
+|---|---|
+| Vanilla REINFORCE | `G_t` |
+| Standardized Returns | `(G_t - mean(G)) / (std(G) + ε)` |
+| Value Baseline | `G_t - V_w(S_t)` |
 
-```text
-stato CartPole
-      │
-      ▼
-4 input
-      │
-Linear(4, 64)
-      │
-    ReLU
-      │
-Linear(64, 2)
-      │
-      ▼
-2 logits
-```
+L'obiettivo è verificare se ridurre la variabilità del learning signal renda REINFORCE più stabile e meno sensibile alla training seed.
 
-I logits vengono utilizzati per costruire una distribuzione categorica:
+### Standardized Returns
 
-```python
-distribution = Categorical(logits=logits)
-```
-
-e l'azione viene campionata dalla policy:
-
-```python
-action = distribution.sample()
-```
-
-Per ogni step vengono memorizzati:
+Nel Vanilla REINFORCE la policy loss usa direttamente il discounted return:
 
 ```text
-log π(a_t | s_t)
-reward_t
+L_policy = - Σ_t G_t log πθ(A_t | S_t)
 ```
 
-e al termine dell'episodio vengono calcolati i discounted return:
-
-```text
-G_t = r_t + gamma * G_(t+1)
-```
-
-La policy loss vanilla è:
-
-```text
-L_policy = - Σ_t G_t log π(a_t | s_t)
-```
-
-Il return Monte Carlo viene quindi utilizzato direttamente come peso
-dell'aggiornamento della policy.
-
----
-
-# 2. Standardizzazione dei return
-
-## Motivazione
-
-Nel vanilla REINFORCE la magnitudine del policy gradient dipende direttamente
-dalla scala dei return osservati.
-
-Durante il training tale scala può cambiare molto:
-
-```text
-episodi corti
-    ↓
-return piccoli
-
-episodi lunghi
-    ↓
-return grandi
-```
-
-La prima tecnica studiata consiste quindi nel normalizzare i return all'interno
-di ogni episodio.
-
-Dato il vettore:
-
-```text
-G_0, G_1, ..., G_(T-1)
-```
-
-vengono calcolati:
-
-```text
-μ_G = mean(G)
-σ_G = std(G)
-```
-
-e quindi:
+La prima variante standardizza i return all'interno dell'episodio:
 
 ```text
 G_hat_t =
-(G_t - μ_G) / (σ_G + epsilon)
+(G_t - mean(G)) / (std(G) + ε)
 ```
 
-con:
+con `ε = 1e-8`.
 
-```text
-epsilon = 1e-8
-```
+La rete e il training loop non cambiano: cambia soltanto il coefficiente che pesa ogni `log_prob`.
 
-per stabilità numerica.
+### Value Baseline
 
-Nel codice viene utilizzato:
-
-```python
-returns.std(correction=0)
-```
-
-trattando quindi il vettore dei return dell'episodio come popolazione completa.
-
----
-
-## Effetto sulla policy loss
-
-Vanilla REINFORCE utilizza:
-
-```text
-L_policy =
-- Σ_t G_t log π(a_t | s_t)
-```
-
-con la standardizzazione viene invece utilizzato:
-
-```text
-L_policy =
-- Σ_t G_hat_t log π(a_t | s_t)
-```
-
-La PolicyNetwork non cambia.
-
-Cambiano solamente i coefficienti che moltiplicano le log-probabilità.
-
-Il flusso rimane quindi:
-
-```text
-stato
-  │
-  ▼
-PolicyNetwork
-  │
-  ▼
-logits
-  │
-  ▼
-azione campionata
-  │
-  ▼
-log_prob
-  │
-  ▼
-policy loss
-  │
-  ▼
-backpropagation
-```
-
-La standardizzazione non introduce una seconda rete neurale e non utilizza
-informazioni specifiche sullo stato.
-
-Utilizza solamente le statistiche dei return dell'episodio corrente.
-
----
-
-# 3. Learned Value Baseline
-
-La seconda tecnica introduce una nuova rete neurale:
-
-```text
-ValueNetwork
-```
-
-che cerca di approssimare la state-value function:
+La seconda variante introduce una `ValueNetwork` che stima il valore dello stato:
 
 ```text
 V_w(s) ≈ v_π(s)
 ```
 
-dove:
+Le architetture utilizzate sono:
 
 ```text
-v_π(s) = E_π[G_t | S_t = s]
+PolicyNetwork: 4 → 64 → 2
+ValueNetwork:  4 → 64 → 1
 ```
 
-La rete cerca quindi di stimare:
-
-```text
-quanto return futuro ci si può aspettare
-partendo da un determinato stato
-```
-
----
-
-## Architettura
-
-La PolicyNetwork continua a essere:
-
-```text
-4 → 64 → 2
-```
-
-La nuova ValueNetwork è invece:
-
-```text
-4 → 64 → 1
-```
-
-con:
-
-```text
-Linear(4, 64)
-ReLU
-Linear(64, 1)
-```
-
-La differenza concettuale è:
-
-```text
-PolicyNetwork
-input  → stato
-output → 2 logits
-ruolo  → scegliere l'azione
-
-
-ValueNetwork
-input  → stato
-output → 1 valore
-ruolo  → stimare quanto vale lo stato
-```
-
-La ValueNetwork non sceglie quindi nessuna azione.
-
----
-
-# 4. Advantage
-
-La ValueNetwork permette di sostituire il return diretto con un segnale
-relativo allo stato corrente.
-
-L'advantage utilizzato è:
+La policy viene aggiornata usando l'advantage stimato:
 
 ```text
 A_t = G_t - V_w(S_t)
 ```
 
-che può essere interpretato come:
-
-```text
-return realmente ottenuto
-        -
-return che ci aspettavamo da quello stato
-```
-
-Se:
-
-```text
-A_t > 0
-```
-
-il risultato ottenuto è stato migliore del previsto.
-
-Se:
-
-```text
-A_t < 0
-```
-
-il risultato è stato peggiore del previsto.
-
-Se:
-
-```text
-A_t ≈ 0
-```
-
-il risultato è stato circa quello atteso.
-
-La policy loss diventa quindi:
+quindi:
 
 ```text
 L_policy =
-- Σ_t A_t log π(a_t | s_t)
+- Σ_t A_t log πθ(A_t | S_t)
 ```
 
-ovvero:
-
-```text
-L_policy =
-- Σ_t (G_t - V_w(S_t)) log π(a_t | s_t)
-```
-
----
-
-# 5. Training della ValueNetwork
-
-Per addestrare la ValueNetwork viene utilizzato come target il return Monte
-Carlo osservato:
-
-```text
-target = G_t
-```
-
-La loss è una Mean Squared Error:
+La ValueNetwork viene invece addestrata a predire il return Monte Carlo:
 
 ```text
 L_value =
 MSE(V_w(S_t), G_t)
 ```
 
-cioè:
-
-```text
-L_value =
-mean_t (V_w(S_t) - G_t)^2
-```
-
-Sono quindi presenti due optimizer indipendenti:
-
-```text
-policy optimizer
-        ↓
-PolicyNetwork
-
-
-value optimizer
-        ↓
-ValueNetwork
-```
-
-Entrambi utilizzano Adam.
-
-Nel protocollo finale:
-
-```text
-policy learning rate = 0.001
-value learning rate  = 0.001
-```
-
----
-
-# 6. Separazione dei gradienti
-
-Una scelta implementativa fondamentale riguarda il gradient flow.
-
-L'advantage viene calcolato tramite:
+Nel codice:
 
 ```python
 advantages = returns_tensor - values.detach()
 ```
 
-Il `detach()` impedisce alla policy loss di aggiornare la ValueNetwork.
+Il `detach()` mantiene separati i due gradient flow: la policy loss aggiorna soltanto la `PolicyNetwork`, mentre la value loss aggiorna soltanto la `ValueNetwork`.
 
-Senza `detach()` si avrebbe:
-
-```text
-policy loss
-    │
-    ├── log_prob
-    │      ↓
-    │   PolicyNetwork
-    │
-    └── values
-           ↓
-       ValueNetwork
-```
-
-creando un percorso di gradiente indesiderato.
-
-Con `detach()`:
-
-```text
-POLICY UPDATE
-
-policy loss
-    ↓
-log_prob
-    ↓
-PolicyNetwork
-
-
-VALUE UPDATE
-
-value loss
-    ↓
-V(S_t)
-    ↓
-ValueNetwork
-```
-
-Le due reti vengono quindi aggiornate separatamente.
+La baseline utilizza quindi un'informazione **dipendente dallo stato**, mentre la standardizzazione utilizza soltanto le statistiche dei return dell'episodio corrente.
 
 ---
 
-# 7. Trajectory estesa
+## Implementazione
 
-Vanilla REINFORCE necessita principalmente di:
+La struttura dell'esercizio è:
 
 ```text
-log_probs
-rewards
+DLA_LAB3/
+├── models.py
+├── reinforce.py
+│
+└── Exercise2/
+    ├── README.md
+    ├── main.py
+    ├── reinforce_ex2.py
+    ├── value_baseline_main.py
+    ├── evaluate_checkpoints.py
+    ├── plot_results.py
+    ├── runs/
+    ├── robust_evaluation/
+    └── plots/
 ```
 
-Per utilizzare la ValueNetwork è necessario conservare anche gli stati.
+| File | Responsabilità |
+|---|---|
+| `../models.py` | `PolicyNetwork` e `ValueNetwork` |
+| `../reinforce.py` | discounted return ed evaluation condivisa |
+| `reinforce_ex2.py` | standardizzazione, trajectory con stati, policy/value update e training loop |
+| `main.py` | training Vanilla o Standardized Returns |
+| `value_baseline_main.py` | training con learned Value Baseline |
+| `evaluate_checkpoints.py` | robust evaluation di best e final checkpoint |
+| `plot_results.py` | aggregazione delle run e generazione dei grafici |
 
-Durante ogni episodio vengono quindi memorizzati:
+### Controllo della randomizzazione
 
-```text
-state_t
-log_prob_t
-reward_t
-```
+L'inizializzazione della ValueNetwork consuma numeri casuali aggiuntivi.
 
-Per una trajectory di lunghezza `T`:
-
-```text
-states      → (T, 4)
-log_probs   → (T,)
-returns     → (T,)
-values      → (T,)
-advantages  → (T,)
-```
-
-Lo stato viene memorizzato prima di eseguire l'azione:
+Per evitare che la sola presenza della seconda rete modifichi artificialmente la successiva sequenza di campionamento della policy, `value_baseline_main.py`:
 
 ```text
-S_t
-  │
-  ▼
-PolicyNetwork
-  │
-  ▼
-A_t
-  │
-  ▼
-env.step(A_t)
-```
-
-in modo che:
-
-```text
-states[t]
-log_probs[t]
-returns[t]
-values[t]
-```
-
-facciano tutti riferimento allo stesso timestep.
-
----
-
-# 8. Scelte implementative
-
-L'Exercise 2 è stato strutturato mantenendo separato il codice specifico dalle
-funzioni vanilla dell'Exercise 1.
-
-La struttura principale è:
-
-```text
-models.py
-    ├── PolicyNetwork
-    └── ValueNetwork
-
-reinforce.py
-    └── funzioni comuni dell'Exercise 1
-
-Exercise2/reinforce_ex2.py
-    ├── trajectory con stati
-    ├── standardizzazione dei return
-    ├── policy update
-    ├── policy + value update
-    ├── training standardizzato
-    └── training con value baseline
-
-Exercise2/main.py
-    ├── Vanilla REINFORCE
-    └── Standardized Returns
-
-Exercise2/value_baseline_main.py
-    └── REINFORCE + Value Baseline
-```
-
----
-
-## Parametri configurabili da command line
-
-Anche l'Exercise 2 utilizza parametri configurabili da terminale.
-
-Per vanilla e standardized:
-
-```text
---mode
---seed
---episodes
---gamma
---lr
---hidden-dim
---eval-every
---eval-episodes
---run-name
-```
-
-Per la Value Baseline:
-
-```text
---seed
---episodes
---gamma
---policy-lr
---value-lr
---hidden-dim
---eval-every
---eval-episodes
---run-name
-```
-
-Questo permette di eseguire facilmente esperimenti multi-seed mantenendo
-identico il protocollo.
-
----
-
-# 9. Controllo della randomizzazione
-
-L'introduzione della ValueNetwork richiede un'ulteriore inizializzazione
-casuale dei pesi.
-
-Se non venisse gestita, questa inizializzazione consumerebbe numeri dal
-generatore casuale PyTorch e modificherebbe la successiva sequenza di
-campionamento delle azioni rispetto agli altri metodi.
-
-Per ridurre questa differenza artificiale viene quindi:
-
-```text
-inizializzata PolicyNetwork
+inizializza PolicyNetwork
         ↓
-salvato lo stato RNG
+salva lo stato RNG PyTorch
         ↓
-inizializzata ValueNetwork
+inizializza ValueNetwork
         ↓
-ripristinato lo stato RNG
+ripristina lo stato RNG
 ```
 
-In questo modo l'esistenza della seconda rete non altera semplicemente per
-effetto collaterale la sequenza RNG utilizzata successivamente dal training
-della policy.
+Questa scelta rende il confronto tra configurazioni più controllato.
 
 ---
 
-# 10. Salvataggio degli artifact
+## Protocollo sperimentale
 
-Ogni run vanilla o standardized produce:
-
-```text
-config.json
-training_metrics.csv
-evaluation_metrics.csv
-policy.pt
-best_policy.pt
-```
-
-Per la Value Baseline vengono inoltre salvati:
-
-```text
-value.pt
-best_value.pt
-```
-
-La differenza tra i checkpoint della policy è:
-
-```text
-best_policy.pt
-=
-pesi corrispondenti alla migliore
-evaluation periodica osservata
-
-
-policy.pt
-=
-pesi dopo l'ultimo episodio di training
-```
-
-Per la Value Baseline, `best_value.pt` viene salvato nello stesso momento del
-`best_policy.pt`.
-
-Il criterio di selezione rimane comunque la performance della policy, non la
-value loss.
-
----
-
-# 11. Protocollo sperimentale
-
-L'Exercise 1 aveva mostrato che:
-
-```text
-lr = 0.001
-```
-
-era più robusto di `0.005` e `0.01`.
-
-Aveva inoltre mostrato che passando da:
-
-```text
-1000 → 2000 episodi
-```
-
-vanilla REINFORCE continuava a migliorare.
-
-Per questo motivo l'Exercise 2 utilizza direttamente come riferimento:
+La configurazione finale è:
 
 | Parametro | Valore |
 |---|---:|
-| Environment | CartPole-v1 |
-| Policy | 4 → 64 → 2 |
+| Environment | `CartPole-v1` |
+| Policy | `4 → 64 → 2` |
 | Activation | ReLU |
 | Policy optimizer | Adam |
-| Policy learning rate | 0.001 |
-| Gamma | 0.99 |
-| Training episodes | 2000 |
-| Evaluation interval | 25 |
-| Evaluation episodes | 20 |
-| Hidden dimension | 64 |
-| Evaluation policy | stochastic |
+| Policy learning rate | `0.001` |
+| Discount factor | `0.99` |
+| Training episodes | `2000` |
+| Evaluation interval | `25` episodi |
+| Evaluation episodes | `20` |
+| Hidden dimension | `64` |
+| Evaluation policy | stocastica |
 
-Training seed:
+Per la Value Baseline:
+
+| Parametro | Valore |
+|---|---:|
+| ValueNetwork | `4 → 64 → 1` |
+| Activation | ReLU |
+| Optimizer | Adam |
+| Value learning rate | `0.001` |
+| Target | Monte Carlo return |
+| Loss | MSE |
+
+Le training seed sono:
 
 ```text
 42
@@ -689,120 +191,29 @@ Training seed:
 1000
 ```
 
-Per la Value Baseline:
-
-| Parametro | Valore |
-|---|---:|
-| ValueNetwork | 4 → 64 → 1 |
-| Activation | ReLU |
-| Optimizer | Adam |
-| Value learning rate | 0.001 |
-| Target | Monte Carlo return |
-| Loss | MSE |
-
-Sono stati quindi eseguiti:
+Sono quindi disponibili:
 
 ```text
-3 metodi
-×
-5 training seed
-=
-15 training completi
+3 metodi × 5 seed = 15 run
+```
+
+Ogni run da 2000 episodi produce:
+
+```text
+2000 / 25 = 80 evaluation periodiche
+```
+
+e quindi, per ogni metodo:
+
+```text
+5 seed × 80 evaluation = 400 evaluation
 ```
 
 ---
 
-# 12. Configurazioni confrontate
+## Risultati durante il training
 
-## Vanilla REINFORCE
-
-```text
-standardize_returns = False
-value_baseline      = False
-```
-
-Segnale utilizzato:
-
-```text
-G_t
-```
-
----
-
-## Standardized Returns
-
-```text
-standardize_returns = True
-value_baseline      = False
-```
-
-Segnale utilizzato:
-
-```text
-(G_t - mean(G)) / (std(G) + epsilon)
-```
-
----
-
-## Value Baseline
-
-```text
-standardize_returns = False
-value_baseline      = True
-```
-
-Segnale utilizzato:
-
-```text
-G_t - V_w(S_t)
-```
-
-Tutto il resto del protocollo viene mantenuto il più possibile invariato.
-
----
-
-# 13. Evaluation durante il training
-
-La policy viene valutata:
-
-```text
-ogni 25 episodi di training
-```
-
-su:
-
-```text
-20 episodi indipendenti
-```
-
-senza eseguire:
-
-```text
-backward()
-optimizer.step()
-```
-
-Con 2000 episodi vengono quindi prodotte:
-
-```text
-2000 / 25 = 80 evaluation
-```
-
-per ciascuna training seed.
-
-Per ogni metodo abbiamo:
-
-```text
-5 seed × 80 evaluation
-=
-400 evaluation periodiche
-```
-
----
-
-# 14. Risultati durante il training
-
-## Reward finale
+### Reward finale
 
 Considerando l'ultima evaluation periodica delle cinque training seed:
 
@@ -812,10 +223,9 @@ Considerando l'ultima evaluation periodica delle cinque training seed:
 | Standardized Returns | **498.56 ± 2.88** |
 | Value Baseline | **498.43 ± 2.20** |
 
-Entrambe le tecniche di variance reduction producono quindi un risultato
-finale molto più consistente rispetto al vanilla REINFORCE.
+La differenza principale non è soltanto nel reward medio, ma nella dispersione tra training seed.
 
-In particolare, la deviazione standard tra training seed passa da:
+La deviazione standard finale scende da:
 
 ```text
 14.26
@@ -828,16 +238,21 @@ a:
 2.20  → Value Baseline
 ```
 
+<p align="center">
+  <img src="plots/evaluation_mean_std.png"
+       alt="Evaluation reward medio e deviazione standard sulle cinque training seed"
+       width="900">
+</p>
+
+La Value Baseline raggiunge più rapidamente la regione di reward elevato e mostra una minore variabilità nella parte finale del training.
+
 ---
 
-## Velocità di raggiungimento del massimo
+### Velocità di apprendimento
 
-È stato inoltre considerato il primo episodio nel quale una evaluation
-periodica raggiunge il reward medio massimo di 500.
+È stato misurato il primo episodio nel quale una evaluation periodica raggiunge reward medio `500`.
 
-In media:
-
-| Metodo | Primo reward 500 |
+| Metodo | Primo reward 500 medio |
 |---|---:|
 | Vanilla REINFORCE | 1340 |
 | Standardized Returns | 1310 |
@@ -847,17 +262,12 @@ La Value Baseline raggiunge quindi il massimo mediamente circa:
 
 ```text
 395 episodi prima del Vanilla
-```
-
-e:
-
-```text
 365 episodi prima dello Standardized
 ```
 
 ---
 
-## Frequenza delle evaluation ad alta performance
+### Permanenza nella regione ad alta performance
 
 Sulle 400 evaluation disponibili per metodo:
 
@@ -867,203 +277,90 @@ Sulle 400 evaluation disponibili per metodo:
 | Standardized Returns | 167 / 400 | 51 / 400 |
 | **Value Baseline** | **219 / 400** | **103 / 400** |
 
-In percentuale, le evaluation esattamente a 500 sono:
+Le evaluation esattamente a `500` rappresentano:
 
 ```text
-Vanilla REINFORCE:
-27 / 400 = 6.75%
-
-Standardized Returns:
-51 / 400 = 12.75%
-
-Value Baseline:
-103 / 400 = 25.75%
+Vanilla REINFORCE   6.75%
+Standardized       12.75%
+Value Baseline     25.75%
 ```
 
-La Value Baseline non si limita quindi a raggiungere il massimo prima, ma
-rimane molto più frequentemente nella regione di performance massima.
+La baseline appresa non si limita quindi a raggiungere il massimo prima: rimane più frequentemente nella regione di massima performance.
 
 ---
 
-# 15. Evoluzione media sulle cinque seed
+## Analisi delle singole seed
 
-![Evaluation reward medio](plots/evaluation_mean_std.png)
+<p align="center">
+  <img src="plots/evaluation_individual.png"
+       alt="Evaluation reward delle singole training seed per i tre metodi"
+       width="900">
+</p>
 
-Il grafico mostra la media dell'evaluation reward sulle cinque training seed
-con una banda pari a una deviazione standard.
+Le curve individuali evidenziano che nessuna delle tecniche elimina completamente la natura stocastica di REINFORCE.
 
-Il comportamento generale è:
+Vanilla REINFORCE mostra la variabilità maggiore e può subire cali significativi anche dopo aver raggiunto reward elevati.
+
+La standardizzazione riduce frequenza e intensità delle oscillazioni.
+
+La Value Baseline porta in genere le seed nella regione di reward elevato più rapidamente e mantiene curve maggiormente concentrate vicino al massimo.
+
+---
+
+## Training reward
+
+<p align="center">
+  <img src="plots/training_reward_mean_std.png"
+       alt="Training reward aggregato sulle cinque training seed"
+       width="900">
+</p>
+
+Il grafico utilizza una moving average di `50` episodi.
+
+Il training reward conferma la tendenza osservata nell'evaluation: la riduzione della varianza produce soprattutto un **apprendimento più consistente**, non semplicemente un picco di reward più alto.
+
+---
+
+## Value loss
+
+<p align="center">
+  <img src="plots/value_loss_mean_std.png"
+       alt="ValueNetwork MSE aggregata sulle cinque training seed"
+       width="900">
+</p>
+
+La value loss non deve essere interpretata come una classica validation loss supervisionata.
+
+Durante il training cambiano continuamente:
 
 ```text
-Value Baseline
-        ↓
-crescita più rapida
-        ↓
-alta performance raggiunta prima
-        ↓
-bassa variabilità nella fase finale
-```
-
-Lo Standardized Returns migliora anch'esso nettamente il comportamento rispetto
-al vanilla.
-
-Vanilla REINFORCE raggiunge comunque reward molto elevati, ma presenta una
-maggiore variabilità.
-
-Tra circa 1300 e 1550 episodi la banda del vanilla aumenta sensibilmente.
-
-Questo deriva dal fatto che alcune training seed mantengono una policy vicina
-al massimo mentre altre subiscono temporanei policy collapse.
-
----
-
-# 16. Analisi delle singole training seed
-
-![Singole training seed](plots/evaluation_individual.png)
-
-Le curve individuali permettono di osservare comportamenti che la sola media
-potrebbe nascondere.
-
-### Vanilla REINFORCE
-
-Il vanilla raggiunge frequentemente reward vicini a 500, ma alcune seed
-presentano cali molto significativi anche dopo aver quasi risolto il problema.
-
-Il fenomeno osservato nell'Exercise 1 rimane quindi presente:
-
-```text
-policy buona
-    ↓
-nuovi update Monte Carlo
-    ↓
-forte oscillazione
-    ↓
-temporaneo policy collapse
-```
-
----
-
-### Standardized Returns
-
-La standardizzazione riduce nettamente la frequenza e l'intensità dei collapse.
-
-Rimangono comunque alcune oscillazioni isolate.
-
-Questo conferma che controllare la scala dei return aiuta il training, ma non
-fornisce informazioni specifiche sul valore dello stato corrente.
-
----
-
-### Value Baseline
-
-La Value Baseline porta le cinque seed nella regione di reward elevato più
-rapidamente.
-
-Sono ancora presenti occasionali cali temporanei, quindi la tecnica non elimina
-completamente la natura stocastica del training.
-
-Tuttavia le curve risultano mediamente più concentrate vicino a 500.
-
----
-
-# 17. Training reward
-
-![Training reward](plots/training_reward_mean_std.png)
-
-Il training reward mostra la stessa tendenza osservata durante l'evaluation.
-
-Per rendere leggibile la curva viene utilizzata una moving average su 50
-episodi.
-
-La Value Baseline entra più rapidamente nella regione di reward elevato.
-
-Il Vanilla REINFORCE mostra invece una forte crescita della variabilità nella
-parte centrale/finale del training, coerente con i collapse osservati nelle
-singole seed.
-
-La conclusione non è quindi semplicemente:
-
-```text
-variance reduction
-→ reward più alto
-```
-
-ma soprattutto:
-
-```text
-variance reduction
-→ apprendimento più consistente
-```
-
----
-
-# 18. Value loss
-
-![Value loss](plots/value_loss_mean_std.png)
-
-La value loss non deve essere interpretata come una classica validation loss
-supervisionata.
-
-Durante il training la PolicyNetwork cambia continuamente.
-
-Di conseguenza cambiano anche:
-
-```text
+policy
 stati visitati
 lunghezza degli episodi
-return osservati
+distribuzione dei return
 target della ValueNetwork
 ```
 
-All'inizio gli episodi sono relativamente corti e i return hanno una scala
-ridotta.
+Il problema di regressione è quindi non stazionario.
 
-Quando la policy migliora:
+Una crescita temporanea della MSE non implica automaticamente che l'agente stia peggiorando.
 
-```text
-episodi più lunghi
-        ↓
-return Monte Carlo più grandi
-        ↓
-problema di regressione più difficile
-        ↓
-value loss può aumentare
-```
-
-Il grafico mostra infatti una crescita iniziale della MSE, seguita da una
-progressiva diminuzione e stabilizzazione quando la policy entra nella regione
-di performance elevata.
-
-Il comportamento non indica quindi automaticamente divergenza.
-
-La value loss è utilizzata principalmente come metrica diagnostica.
-
-La metrica fondamentale rimane la performance della policy.
+La `value_loss` viene utilizzata come metrica diagnostica; la misura principale della qualità dell'agente rimane il reward di evaluation.
 
 ---
 
-# 19. Robust evaluation
+## Robust evaluation
 
-Le evaluation periodiche durante il training utilizzano solamente 20 episodi.
+Le evaluation periodiche utilizzano `20` episodi e possono essere rumorose.
 
-Come osservato già nell'Exercise 1, questo può produrre una stima rumorosa della
-performance.
-
-È stata quindi eseguita una seconda valutazione indipendente utilizzando:
+Per valutare in modo più affidabile i checkpoint è stata quindi eseguita una robust evaluation con:
 
 ```text
 100 episodi per checkpoint
 evaluation seed = 1000 ... 1099
 ```
 
-Per ogni episodio vengono inizializzati in modo controllato:
-
-```text
-environment RNG
-PyTorch RNG
-```
-
-Gli stessi seed vengono utilizzati per ogni checkpoint.
+Per ogni episodio vengono controllati sia l'RNG dell'environment sia quello PyTorch.
 
 Sono stati valutati:
 
@@ -1077,51 +374,39 @@ Sono stati valutati:
 30 checkpoint
 ```
 
-dove per ogni training viene confrontato:
+confrontando:
 
 ```text
 best_policy.pt
 policy.pt
 ```
 
-In totale:
+per un totale di:
 
 ```text
-30 × 100
-=
-3000 episodi di robust evaluation
+30 × 100 = 3000 episodi
 ```
 
-La ValueNetwork non viene utilizzata durante questa fase.
+Durante questa valutazione la ValueNetwork non è necessaria: l'azione viene scelta esclusivamente dalla PolicyNetwork.
 
-Durante l'evaluation serve solamente:
-
-```text
-PolicyNetwork
-```
-
-perché è la policy a scegliere le azioni.
-
----
-
-# 20. Robust evaluation — risultati aggregati
+### Risultati aggregati
 
 | Metodo | Checkpoint | Reward medio ± std tra training seed | Success rate @500 |
 |---|---|---:|---:|
 | Vanilla REINFORCE | Best | 479.97 ± 9.95 | 89.4% |
-| Vanilla REINFORCE | **Final** | **486.15 ± 8.01** | **89.6%** |
+| Vanilla REINFORCE | Final | 486.15 ± 8.01 | 89.6% |
 | Standardized Returns | Best | 488.76 ± 5.41 | 92.6% |
-| Standardized Returns | **Final** | **496.00 ± 5.33** | **97.0%** |
+| Standardized Returns | Final | 496.00 ± 5.33 | 97.0% |
 | Value Baseline | Best | 485.99 ± 3.71 | 90.2% |
 | **Value Baseline** | **Final** | **498.68 ± 1.22** | **98.6%** |
 
-![Robust reward comparison](plots/robust_reward_comparison.png)
+<p align="center">
+  <img src="plots/robust_reward_comparison.png"
+       alt="Confronto robusto tra best e final checkpoint"
+       width="800">
+</p>
 
-Il valore `±` rappresenta la deviazione standard tra i mean reward ottenuti
-dalle cinque diverse training seed.
-
-Il risultato più forte viene ottenuto dal checkpoint finale della Value
-Baseline:
+Il checkpoint finale della Value Baseline ottiene il risultato aggregato migliore:
 
 ```text
 498.68 ± 1.22
@@ -1135,84 +420,13 @@ con:
 
 ---
 
-# 21. Miglioramento rispetto al Vanilla REINFORCE
+## Robustezza rispetto alla training seed
 
-Confrontando i checkpoint finali:
-
-```text
-Vanilla:
-486.15 ± 8.01
-```
-
-```text
-Standardized:
-496.00 ± 5.33
-```
-
-```text
-Value Baseline:
-498.68 ± 1.22
-```
-
-Lo Standardized Returns migliora il reward robusto medio di:
-
-```text
-496.00 - 486.15
-=
-+9.85
-```
-
-e il success rate passa da:
-
-```text
-89.6% → 97.0%
-```
-
-ovvero:
-
-```text
-+7.4 punti percentuali
-```
-
-La Value Baseline migliora il reward rispetto al vanilla di:
-
-```text
-498.68 - 486.15
-=
-+12.53
-```
-
-mentre il success rate passa da:
-
-```text
-89.6% → 98.6%
-```
-
-ovvero:
-
-```text
-+9.0 punti percentuali
-```
-
-La variabilità tra training seed diminuisce inoltre da:
-
-```text
-8.01
-```
-
-a:
-
-```text
-1.22
-```
-
-per la Value Baseline.
-
----
-
-# 22. Robustezza rispetto alla training seed
-
-![Final robust reward by seed](plots/final_robust_reward_by_seed.png)
+<p align="center">
+  <img src="plots/final_robust_reward_by_seed.png"
+       alt="Reward robusto dei checkpoint finali per training seed"
+       width="850">
+</p>
 
 I checkpoint finali producono:
 
@@ -1224,60 +438,41 @@ I checkpoint finali producono:
 | 789 | 491.24 | **498.76** | 497.75 |
 | 1000 | 471.10 | **499.19** | 496.92 |
 
-La Value Baseline ottiene:
+Per la Value Baseline tutte le cinque training seed rimangono nell'intervallo:
 
 ```text
 496.92 ≤ mean reward ≤ 500
 ```
 
-per tutte le cinque training seed.
-
-Inoltre:
-
-```text
-seed 42  → 500.00
-seed 456 → 500.00
-```
-
-significa che entrambe le policy hanno raggiunto:
-
-```text
-500 / 500 / ... / 500
-```
-
-in tutti i 100 episodi della robust evaluation.
+Le seed `42` e `456` ottengono reward `500` in tutti i 100 episodi della robust evaluation.
 
 ---
 
-# 23. Robust success rate
+## Success rate
 
-![Robust success rate](plots/robust_success_rate_comparison.png)
+<p align="center">
+  <img src="plots/robust_success_rate_comparison.png"
+       alt="Success rate a reward 500 nella robust evaluation"
+       width="800">
+</p>
 
 Per i checkpoint finali:
 
 ```text
-Vanilla REINFORCE:
-89.6%
-
-Standardized Returns:
-97.0%
-
-Value Baseline:
-98.6%
+Vanilla REINFORCE   89.6%
+Standardized        97.0%
+Value Baseline      98.6%
 ```
 
-Questo risultato mostra che il vantaggio delle tecniche di variance reduction
-non consiste solamente in alcuni reward medi leggermente più elevati.
-
-La probabilità empirica di raggiungere il limite massimo di CartPole aumenta
-in modo significativo.
+La differenza tra i metodi riguarda quindi anche la probabilità empirica di raggiungere il limite massimo del task, non soltanto una piccola variazione del reward medio.
 
 ---
 
-# 24. Best checkpoint vs checkpoint finale
+## Best checkpoint e checkpoint finale
 
-Un risultato interessante è che, in media, il checkpoint finale risulta
-migliore del checkpoint denominato `best` per tutti e tre i metodi.
+Il checkpoint chiamato `best_policy.pt` viene selezionato usando evaluation periodiche da soli `20` episodi.
+
+Nella robust evaluation da 100 episodi, il checkpoint finale risulta mediamente migliore per tutti e tre i metodi:
 
 ```text
 Vanilla:
@@ -1290,429 +485,168 @@ Value Baseline:
 485.99 → 498.68
 ```
 
-Questo non è una contraddizione.
-
-`best_policy.pt` significa:
-
-```text
-checkpoint con la migliore
-evaluation periodica su 20 episodi
-```
-
-e non:
-
-```text
-checkpoint realmente migliore
-su qualunque insieme di episodi
-```
-
-Le evaluation periodiche sono stime rumorose.
-
-Una policy può quindi ottenere una valutazione particolarmente favorevole nei
-20 episodi utilizzati per il checkpointing.
-
-La robust evaluation da 100 episodi fornisce invece una misura più affidabile.
-
-Il risultato conferma quindi quanto già osservato nell'Exercise 1:
-
-```text
-best evaluation osservata
-≠
-necessariamente miglior checkpoint reale
-```
-
----
-
-# 25. Esempio — Value Baseline seed 42
-
-Un esempio particolarmente chiaro riguarda la training seed `42`.
-
-Il best checkpoint ottiene:
-
-```text
-Mean reward:       490.82
-Success rate @500: 93%
-```
-
-Il checkpoint finale ottiene invece:
-
-```text
-Mean reward:       500.00
-Std reward:          0.00
-Median reward:     500.00
-Min reward:        500.00
-Max reward:        500.00
-Success rate @500: 100%
-```
-
-Quindi:
-
-```text
-100 / 100
-```
-
-episodi raggiungono il massimo reward.
-
-Un risultato analogo viene ottenuto dal checkpoint finale della training seed
-`456`.
-
----
-
-# 26. Interpretazione complessiva
-
-I tre metodi possono essere interpretati come tre segnali progressivamente più
-informativi.
-
-## Vanilla REINFORCE
-
-Utilizza:
-
-```text
-G_t
-```
-
-direttamente.
-
-Il metodo riesce a risolvere CartPole ma mantiene una forte variabilità.
-
----
-
-## Standardized Returns
-
-Utilizza:
-
-```text
-(G_t - mean(G)) / (std(G) + epsilon)
-```
-
-La trasformazione:
-
-- centra il segnale;
-- ne controlla la scala;
-- riduce parte della variabilità degli update.
-
-Il metodo migliora nettamente la robustezza rispetto al vanilla.
-
-Tuttavia la trasformazione dipende solamente dalle statistiche dell'episodio.
-
----
-
-## Value Baseline
-
-Utilizza:
-
-```text
-G_t - V_w(S_t)
-```
-
-Il segnale è quindi state-dependent.
-
-La policy non viene semplicemente informata del return ottenuto, ma di quanto
-quel return sia stato migliore o peggiore rispetto a ciò che era atteso dallo
-stato corrente.
-
-Nel protocollo utilizzato questo produce:
-
-```text
-apprendimento più rapido
-+
-maggiore permanenza nella regione ad alto reward
-+
-minore variabilità tra seed
-+
-migliore robust evaluation finale
-```
-
----
-
-# 27. Collegamento con Exercise 1
-
-L'Exercise 1 aveva evidenziato:
-
-```text
-Monte Carlo policy gradient
-        │
-        ▼
-elevata varianza
-        │
-        ▼
-sensibilità alla seed
-        │
-        ▼
-oscillazioni
-        │
-        ▼
-policy collapse
-```
-
-L'Exercise 2 interviene direttamente sul segnale moltiplicato per:
-
-```text
-log π(a_t | s_t)
-```
-
-Il confronto finale è:
-
-```text
-Vanilla
-G_t
-        │
-        ▼
-486.15 ± 8.01
-
-
-Standardized
-G_hat_t
-        │
-        ▼
-496.00 ± 5.33
-
-
-Value Baseline
-G_t - V(S_t)
-        │
-        ▼
-498.68 ± 1.22
-```
-
-I risultati sono quindi coerenti con la motivazione iniziale dell'esercizio:
-
-```text
-ridurre la varianza del learning signal
-        ↓
-rendere il policy gradient più affidabile
-        ↓
-ottenere training più stabile
-```
-
----
-
-# 28. Nota sulla Value Baseline e Actor-Critic
-
-La ValueNetwork utilizza come target:
-
-```text
-G_t
-```
-
-cioè il return Monte Carlo completo dell'episodio.
-
-Non viene utilizzato un target bootstrapped del tipo:
-
-```text
-r_t + gamma V(S_(t+1))
-```
-
-L'implementazione rimane quindi **REINFORCE with learned baseline**.
-
-La rete di valore svolge il ruolo di baseline per il policy gradient, ma il
-target utilizzato per il suo training rimane Monte Carlo.
-
----
-
-# 29. Risultati principali
-
-Gli esperimenti permettono di riassumere il comportamento osservato in questo
-modo.
-
-### 1. Vanilla REINFORCE rimane un baseline forte
-
-Con:
-
-```text
-lr = 0.001
-2000 episodi
-```
-
-raggiunge:
-
-```text
-486.15 ± 8.01
-```
-
-nella robust evaluation finale.
-
-Le tecniche dell'Exercise 2 vengono quindi confrontate contro una baseline già
-ben configurata, non contro un training vanilla debole.
-
----
-
-### 2. La standardizzazione migliora significativamente la robustezza
-
-Il checkpoint finale passa da:
-
-```text
-486.15 ± 8.01
-```
-
-a:
-
-```text
-496.00 ± 5.33
-```
-
-con un success rate:
-
-```text
-89.6% → 97.0%
-```
-
----
-
-### 3. La Value Baseline accelera maggiormente l'apprendimento
-
-Il primo reward medio di 500 viene raggiunto mediamente a:
-
-```text
-Vanilla       → episodio 1340
-Standardized  → episodio 1310
-Value baseline→ episodio 945
-```
-
----
-
-### 4. La Value Baseline rimane più frequentemente nella regione di massimo reward
-
-Evaluation esattamente a 500:
-
-```text
-Vanilla:
-27 / 400
-
-Standardized:
-51 / 400
-
-Value Baseline:
-103 / 400
-```
-
----
-
-### 5. La Value Baseline produce i checkpoint finali più consistenti
-
-La robust evaluation finale è:
-
-```text
-498.68 ± 1.22
-```
-
-con:
-
-```text
-98.6% success rate @500
-```
-
-e tutte le training seed ottengono almeno:
-
-```text
-496.92
-```
-
-di reward medio sui 100 episodi.
-
----
-
-### 6. La ValueNetwork non deve essere giudicata solamente dalla sua MSE
-
-La target distribution cambia insieme alla policy.
-
-La value loss è quindi non stazionaria e può aumentare anche mentre la policy
-sta migliorando.
-
----
-
-### 7. Il checkpoint chiamato `best` non è necessariamente quello più robusto
-
-Per tutti i tre metodi il checkpoint finale ottiene una performance aggregata
-migliore nella robust evaluation.
-
-Questo conferma la necessità di distinguere tra:
+`best` significa quindi:
 
 ```text
 migliore evaluation periodica osservata
 ```
 
-e:
+non necessariamente:
 
 ```text
-migliore performance stimata su nuovi episodi
+checkpoint più robusto su nuovi episodi
+```
+
+Il risultato evidenzia l'importanza di una valutazione indipendente e sufficientemente ampia.
+
+---
+
+## REINFORCE with learned baseline, non Actor-Critic TD
+
+La ValueNetwork viene addestrata usando come target il return Monte Carlo completo:
+
+```text
+G_t
+```
+
+Non viene utilizzato un target bootstrapped come:
+
+```text
+r_t + γ V(S_(t+1))
+```
+
+L'implementazione rimane quindi **REINFORCE with learned value baseline**.
+
+La rete di valore svolge il ruolo di baseline state-dependent per il policy gradient, ma non introduce un aggiornamento Temporal-Difference.
+
+---
+
+## Output e artifact
+
+Le run Vanilla e Standardized producono:
+
+```text
+Exercise2/runs/<run_name>/
+├── config.json
+├── training_metrics.csv
+├── evaluation_metrics.csv
+├── policy.pt
+└── best_policy.pt
+```
+
+Le run con Value Baseline producono inoltre:
+
+```text
+value.pt
+best_value.pt
+```
+
+`training_metrics.csv` contiene:
+
+```text
+episode
+reward
+policy_loss
+```
+
+e, per la Value Baseline:
+
+```text
+episode
+reward
+policy_loss
+value_loss
+```
+
+`evaluation_metrics.csv` contiene:
+
+```text
+episode
+average_reward
+average_length
+```
+
+La robust evaluation salva:
+
+```text
+Exercise2/robust_evaluation/
+├── checkpoint_summary.csv
+├── aggregated_summary.csv
+└── *_episodes.csv
+```
+
+I grafici finali vengono salvati in:
+
+```text
+Exercise2/plots/
+```
+
+e comprendono:
+
+```text
+evaluation_mean_std.png
+evaluation_individual.png
+training_reward_mean_std.png
+value_loss_mean_std.png
+robust_reward_comparison.png
+robust_success_rate_comparison.png
+final_robust_reward_by_seed.png
 ```
 
 ---
 
-# 30. Riproducibilità
+## Riproduzione
 
-## Ambiente
+I comandi vanno eseguiti dalla directory `DLA_LAB3` con l'ambiente `DRL` attivo.
 
-Dalla directory:
-
-```text
-DLA_LAB3/
-```
-
-attivare:
-
-```bash
-conda activate DRL
-```
-
----
-
-## Vanilla REINFORCE
-
-Esempio:
+### Vanilla REINFORCE
 
 ```bash
 python -m Exercise2.main \
-    --mode vanilla \
-    --seed 42 \
-    --episodes 2000 \
-    --gamma 0.99 \
-    --lr 0.001 \
-    --hidden-dim 64 \
-    --eval-every 25 \
-    --eval-episodes 20 \
-    --run-name ex2_vanilla_ep2000_lr0.001_seed42
+  --mode vanilla \
+  --seed 42 \
+  --episodes 2000 \
+  --gamma 0.99 \
+  --lr 0.001 \
+  --hidden-dim 64 \
+  --eval-every 25 \
+  --eval-episodes 20 \
+  --run-name ex2_vanilla_ep2000_lr0.001_seed42
 ```
 
----
-
-## Standardized Returns
+### Standardized Returns
 
 ```bash
 python -m Exercise2.main \
-    --mode standardized \
-    --seed 42 \
-    --episodes 2000 \
-    --gamma 0.99 \
-    --lr 0.001 \
-    --hidden-dim 64 \
-    --eval-every 25 \
-    --eval-episodes 20 \
-    --run-name ex2_standardized_ep2000_lr0.001_seed42
+  --mode standardized \
+  --seed 42 \
+  --episodes 2000 \
+  --gamma 0.99 \
+  --lr 0.001 \
+  --hidden-dim 64 \
+  --eval-every 25 \
+  --eval-episodes 20 \
+  --run-name ex2_standardized_ep2000_lr0.001_seed42
 ```
 
----
-
-## Value Baseline
+### Value Baseline
 
 ```bash
 python -m Exercise2.value_baseline_main \
-    --seed 42 \
-    --episodes 2000 \
-    --gamma 0.99 \
-    --policy-lr 0.001 \
-    --value-lr 0.001 \
-    --hidden-dim 64 \
-    --eval-every 25 \
-    --eval-episodes 20 \
-    --run-name ex2_value_baseline_ep2000_plr0.001_vlr0.001_seed42
+  --seed 42 \
+  --episodes 2000 \
+  --gamma 0.99 \
+  --policy-lr 0.001 \
+  --value-lr 0.001 \
+  --hidden-dim 64 \
+  --eval-every 25 \
+  --eval-episodes 20 \
+  --run-name ex2_value_baseline_ep2000_plr0.001_vlr0.001_seed42
 ```
 
-Il protocollo completo utilizza:
+Il protocollo completo ripete le tre configurazioni con:
 
 ```text
-seed:
 42
 123
 456
@@ -1720,198 +654,77 @@ seed:
 1000
 ```
 
-per tutti e tre i metodi.
+### Robust evaluation
 
----
-
-## Robust evaluation
-
-Dopo aver completato le 15 run:
+Dopo aver generato i checkpoint:
 
 ```bash
 python -m Exercise2.evaluate_checkpoints
 ```
 
-Vengono valutati:
-
-```text
-best_policy.pt
-policy.pt
-```
-
-per tutte le configurazioni.
-
-I risultati vengono salvati in:
-
-```text
-Exercise2/robust_evaluation/
-```
-
-tra cui:
-
-```text
-checkpoint_summary.csv
-aggregated_summary.csv
-*_episodes.csv
-```
-
----
-
-## Generazione dei grafici
+### Grafici
 
 ```bash
 python -m Exercise2.plot_results
 ```
 
-I grafici principali prodotti sono:
+---
 
-```text
-plots/evaluation_mean_std.png
-plots/evaluation_individual.png
-plots/training_reward_mean_std.png
-plots/value_loss_mean_std.png
-plots/robust_reward_comparison.png
-plots/robust_success_rate_comparison.png
-plots/final_robust_reward_by_seed.png
-```
+## Limiti
+
+- Il confronto riguarda `CartPole-v1` e le configurazioni effettivamente eseguite; non dimostra una superiorità universale della Value Baseline.
+- Cinque training seed forniscono una misura della variabilità tra run, ma non costituiscono una caratterizzazione statistica esaustiva.
+- La standardizzazione è episodica e non utilizza informazioni specifiche sullo stato.
+- La ValueNetwork apprende da target Monte Carlo non stazionari, quindi la sua MSE non è direttamente confrontabile con una validation loss supervisionata.
+- La policy rimane stocastica anche durante l'evaluation.
+- Il checkpoint `best` è selezionato su 20 episodi e può essere favorito dal rumore della valutazione.
+- I checkpoint `.pt` sono esclusi dal repository Git e devono essere rigenerati localmente per ripetere la robust evaluation completa.
+- Non vengono studiate baseline più complesse, GAE, TD critic o veri algoritmi Actor-Critic: l'obiettivo rimane isolare le due tecniche richieste dall'esercizio.
 
 ---
 
-# 31. Struttura principale
+## Conclusioni
 
-```text
-DLA_LAB3/
-├── models.py
-├── reinforce.py
-│
-└── Exercise2/
-    ├── main.py
-    ├── reinforce_ex2.py
-    ├── value_baseline_main.py
-    ├── evaluate_checkpoints.py
-    ├── plot_results.py
-    ├── README.md
-    │
-    ├── runs/
-    │   └── <run_name>/
-    │       ├── config.json
-    │       ├── training_metrics.csv
-    │       ├── evaluation_metrics.csv
-    │       ├── policy.pt
-    │       ├── best_policy.pt
-    │       ├── value.pt          # solo Value Baseline
-    │       └── best_value.pt     # solo Value Baseline
-    │
-    ├── robust_evaluation/
-    │   ├── checkpoint_summary.csv
-    │   ├── aggregated_summary.csv
-    │   └── *_episodes.csv
-    │
-    └── plots/
-        ├── evaluation_mean_std.png
-        ├── evaluation_individual.png
-        ├── training_reward_mean_std.png
-        ├── value_loss_mean_std.png
-        ├── robust_reward_comparison.png
-        ├── robust_success_rate_comparison.png
-        └── final_robust_reward_by_seed.png
-```
-
----
-
-# Conclusione
-
-L'Exercise 2 mostra sperimentalmente come il segnale utilizzato da REINFORCE
-influenzi in modo significativo la stabilità dell'apprendimento.
-
-Vanilla REINFORCE, utilizzando direttamente i return Monte Carlo:
-
-```text
-G_t
-```
-
-è in grado di risolvere `CartPole-v1`, ma continua a presentare oscillazioni e
-una significativa dipendenza dalla training seed.
+L'Exercise 2 mostra che il modo in cui REINFORCE costruisce il learning signal influenza direttamente la stabilità dell'ottimizzazione.
 
 La standardizzazione:
 
 ```text
-G_hat_t =
-(G_t - mean(G)) / (std(G) + epsilon)
+G_t
+↓
+centratura e normalizzazione
+↓
+G_hat_t
 ```
 
-riduce la variabilità degli update e produce policy finali nettamente più
-robuste.
+controlla la scala degli aggiornamenti e produce policy finali più consistenti.
 
-La learned Value Baseline introduce invece un segnale state-dependent:
+La Value Baseline introduce invece un riferimento dipendente dallo stato:
 
 ```text
-A_t =
 G_t - V_w(S_t)
 ```
 
-che confronta il risultato realmente ottenuto con quello atteso dallo stato
-corrente.
+che misura quanto il return osservato sia stato migliore o peggiore rispetto a ciò che era atteso.
 
-Nel protocollo sperimentale utilizzato questa configurazione produce il miglior
-risultato complessivo.
-
-Durante il training raggiunge il reward massimo più rapidamente e rimane più
-frequentemente nella regione ad alta performance.
-
-Nella robust evaluation dei checkpoint finali ottiene:
+Nel protocollo multi-seed utilizzato, questa configurazione raggiunge più rapidamente la regione di reward massimo e produce la robust evaluation finale più consistente:
 
 ```text
-Mean reward:
 498.68 ± 1.22
-
-Success rate @500:
-98.6%
+98.6% success rate @500
 ```
 
-rispetto a:
+Il risultato supportato dagli esperimenti è quindi circoscritto al protocollo utilizzato: su `CartPole-v1`, con le cinque training seed considerate, **REINFORCE con learned Value Baseline ha mostrato il miglior compromesso osservato tra velocità di apprendimento, stabilità e robustezza finale**.
 
-```text
-Vanilla:
-486.15 ± 8.01
-89.6%
+---
 
-Standardized Returns:
-496.00 ± 5.33
-97.0%
-```
+## Riferimenti e assistenza AI
 
-Il risultato principale dell'esercizio può quindi essere sintetizzato come:
+Riferimenti principali:
 
-```text
-Monte Carlo return diretto
-        ↓
-alta variabilità
+- notebook ufficiale della consegna `DLA-Lab2-DRL.ipynb`;
+- materiale del corso su Policy Gradient, REINFORCE e baseline;
+- Gymnasium — `CartPole-v1`;
+- PyTorch.
 
-
-normalizzazione del return
-        ↓
-maggiore stabilità
-
-
-baseline state-dependent
-        ↓
-advantage più informativo
-        ↓
-training più rapido e robusto
-```
-
-La conclusione non è che la Value Baseline elimini completamente la
-stocasticità di REINFORCE, né che sia necessariamente superiore in qualunque
-problema di reinforcement learning.
-
-Il risultato supportato dagli esperimenti è più preciso:
-
-```text
-nel protocollo CartPole-v1 utilizzato,
-con le cinque training seed considerate,
-REINFORCE con learned value baseline
-ha prodotto il miglior compromesso osservato
-tra velocità di apprendimento,
-stabilità e robustezza finale.
-```
+ChatGPT è stato utilizzato come supporto per chiarimenti teorici, organizzazione del lavoro, revisione del codice, debugging, progettazione degli esperimenti, analisi degli artifact e documentazione. Le configurazioni, i grafici e i risultati quantitativi riportati derivano dal codice e dagli artifact effettivamente prodotti dal progetto.
