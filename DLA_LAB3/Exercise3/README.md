@@ -28,7 +28,7 @@ La stessa implementazione generica viene utilizzata per entrambi gli ambienti, a
 <p align="center">
   <em>Ambienti utilizzati nell'Exercise 3: CartPole-v1 e LunarLander-v3.</em>
 </p>
-
+ 
 
 ## Metodo — Deep Q-Learning
 
