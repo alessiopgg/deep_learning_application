@@ -14,7 +14,6 @@ COMMANDS = {
         "Exercise3.analysis.class_mapping",
         "Validate the detection-to-GTSRB class mapping.",
     ),
-    "check": ("Exercise3.checks.run_all", "Run the Exercise 3 validation suite."),
     "prepare-backbone": (
         "Exercise3.backbone.prepare",
         "Train and publish the canonical GTSRB ResNet-50.",
