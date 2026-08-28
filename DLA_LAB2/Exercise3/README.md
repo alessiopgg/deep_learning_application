@@ -4,6 +4,15 @@ L'Exercise 3 implementa la variante **3.3 — Text-to-Image Retrieval** del Labo
 
 L'obiettivo è costruire un piccolo motore di ricerca semantica in cui l'utente inserisce una descrizione testuale in inglese e il sistema restituisce le immagini di **Flickr8k** più simili secondo lo spazio multimodale appreso da **CLIP**.
 
+<p align="center">
+  <img src="assets/screen1.png"
+       alt="Interfaccia Gradio del sistema di text-to-image retrieval"
+       width="54%">
+  <img src="assets/screen2.png"
+       alt="Esempio di retrieval text-to-image su Flickr8k"
+       width="43%">
+</p>
+
 La soluzione utilizza:
 
 ```text
