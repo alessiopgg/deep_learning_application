@@ -241,26 +241,35 @@ La robust evaluation mostra inoltre che la selezione del checkpoint basata su po
 
 ## Ambiente e riproducibilità
 
-Il laboratorio è stato sviluppato nell'ambiente Conda:
+Il laboratorio è stato sviluppato e testato su **Ubuntu tramite WSL2**, utilizzando **Conda/Miniforge**.
+
+L'ambiente utilizzato è definito nel file:
 
 ```text
-DRL
+environment.yml
 ```
 
-Dalla root del repository:
+e può essere ricreato con:
 
 ```bash
+conda env create -f environment.yml
 conda activate DRL
-cd DLA_LAB3
 ```
 
-Le dipendenze principali sono:
+La configurazione testata utilizza principalmente:
 
-* Python;
-* PyTorch;
-* Gymnasium;
-* NumPy;
-* Matplotlib.
+```text
+Python      3.12.13
+PyTorch     2.13.0
+Gymnasium   1.3.0
+NumPy       2.5.1
+Matplotlib  3.11.1
+pygame      2.6.1
+Box2D       2.3.10
+SWIG        4.4.1
+```
+
+Nell'ambiente utilizzato per gli esperimenti, PyTorch disponeva inoltre di supporto **CUDA 12.9**.
 
 Gli ambienti utilizzati sono:
 
@@ -420,10 +429,10 @@ I grafici finali vengono generati a partire dagli artifact persistiti, evitando 
 
 ## Politica del repository
 
-Per mantenere il repository leggero vengono esclusi dal controllo versione:
+Per mantenere il repository leggero vengono generalmente esclusi dal controllo versione:
 
-* checkpoint e pesi dei modelli (`.pt`, `.pth`, `.ckpt`);
-* directory di checkpoint;
+* checkpoint e pesi dei modelli di grandi dimensioni (`.pt`, `.pth`, `.ckpt`);
+* directory di checkpoint non necessarie alla riproduzione dei risultati;
 * output generici e log locali;
 * array e feature di grandi dimensioni (`.npy`, `.npz`);
 * cache;
@@ -437,6 +446,7 @@ Vengono invece mantenuti, quando utili alla documentazione e alla riproduzione d
 * metriche CSV/JSON;
 * risultati aggregati delle robust evaluation;
 * grafici selezionati;
+* checkpoint leggeri selezionati, necessari per riprodurre alcune evaluation;
 * README.
 
 I risultati numerici riportati nella documentazione derivano dagli artifact delle run effettivamente eseguite.
