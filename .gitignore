@@ -86,3 +86,6 @@ Thumbs.db
 # Exercise-specific temporary files
 # ============================================================
 DLA_LAB1/Exercise3/checks/
+
+# Local Lab 3 backup
+DLA_LAB3/Exercise3_old/

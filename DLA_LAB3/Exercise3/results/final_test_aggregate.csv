@@ -1,0 +1,3 @@
+environment,training_seed_count,test_episodes_per_seed,mean_of_seed_means,std_of_seed_means,min_seed_mean,max_seed_mean,success_threshold,mean_success_percentage,mean_perfect_500_percentage
+CartPole-v1,3,100,477.72,31.508678169672546,433.16,500.0,475.0,88.0,86.33333333333333
+LunarLander-v3,3,100,275.95743827878147,5.3845827834516635,268.37767434913775,280.38055140670264,200.0,97.66666666666667,

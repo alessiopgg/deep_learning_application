@@ -1,3 +1,4 @@
+import argparse
 import csv
 import json
 import random
@@ -6,236 +7,105 @@ from pathlib import Path
 import gymnasium as gym
 import torch
 
-from Exercise3.dqn import (
-    QNetwork,
-    ReplayBuffer,
-    train_dqn,
-)
+from Exercise3.dqn import QNetwork, ReplayBuffer, train_dqn
 
 
-SEED = 42
+CONFIG = {
+    "config_id": "cartpole_final",
+    "environment": "CartPole-v1",
+    "max_episodes": 1000,
+    "gamma": 0.99,
+    "learning_rate": 3e-4,
+    "hidden_dims": [128, 128],
+    "loss": "huber",
+    "buffer_capacity": 50_000,
+    "batch_size": 128,
+    "min_buffer_size": 1_000,
+    "epsilon_start": 1.0,
+    "epsilon_end": 0.05,
+    "epsilon_decay_steps": 15_000,
+    "train_frequency": 4,
+    "target_update": "soft",
+    "target_tau": 0.005,
+    "target_sync_every": 1_000,
+    "gradient_clip_norm": 10.0,
+    "eval_every": 10,
+    "monitor_seed_start": 2_100,
+    "monitor_episodes": 20,
+    "early_stopping_reward": 475.0,
+    "early_stopping_patience": 3,
+}
 
-ENV_NAME = "CartPole-v1"
-
-NUM_EPISODES = 250
-GAMMA = 0.99
-
-LEARNING_RATE = 5e-4
-HIDDEN_DIM = 64
-
-LOSS_TYPE = "mse"
-
-BUFFER_CAPACITY = 10_000
-BATCH_SIZE = 64
-MIN_BUFFER_SIZE = 500
-
-EPSILON_START = 1.0
-EPSILON_END = 0.05
-EPSILON_DECAY_STEPS = 10_000
-
-TARGET_SYNC_EVERY = 250
-
-EVAL_EVERY = 10
-EVAL_EPISODES = 10
-
-RUN_NAME = "cartpole_dqn_final_mse_lr0.0005_seed42"
+BASE_DIR = Path(__file__).parent
+RUNS_DIR = BASE_DIR / "runs"
 
 
-def get_output_dir():
-    output_dir = (
-        Path(__file__).parent
-        / "runs"
-        / RUN_NAME
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Final DQN training on CartPole-v1"
     )
-
-    output_dir.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    return output_dir
+    parser.add_argument("--seed", type=int, default=42)
+    return parser.parse_args()
 
 
-def save_results(
-    training_history,
-    evaluation_history,
-    online_network,
-    output_dir,
-):
-    config = {
-        "run_name": RUN_NAME,
-        "environment": ENV_NAME,
-        "seed": SEED,
-        "num_episodes": NUM_EPISODES,
-        "gamma": GAMMA,
-        "learning_rate": LEARNING_RATE,
-        "optimizer": "Adam",
-        "hidden_dim": HIDDEN_DIM,
-        "loss": LOSS_TYPE,
-        "buffer_capacity": BUFFER_CAPACITY,
-        "batch_size": BATCH_SIZE,
-        "min_buffer_size": MIN_BUFFER_SIZE,
-        "epsilon_start": EPSILON_START,
-        "epsilon_end": EPSILON_END,
-        "epsilon_decay_steps": EPSILON_DECAY_STEPS,
-        "target_sync_every": TARGET_SYNC_EVERY,
-        "eval_every": EVAL_EVERY,
-        "eval_episodes": EVAL_EPISODES,
-        "target_update": "hard",
-        "checkpoint_selection":
-            "best_evaluation_average_reward",
-    }
+def save_csv(path, rows):
+    if not rows:
+        return
 
-    with open(
-        output_dir / "config.json",
-        "w",
-    ) as file:
-        json.dump(
-            config,
+    with open(path, "w", newline="") as file:
+        writer = csv.DictWriter(
             file,
-            indent=4,
+            fieldnames=list(rows[0]),
+            lineterminator="\n",
         )
-
-    with open(
-        output_dir / "training_metrics.csv",
-        "w",
-        newline="",
-    ) as file:
-        writer = csv.writer(file, lineterminator="\n")
-
-        writer.writerow(
-            [
-                "episode",
-                "total_steps",
-                "reward",
-                "length",
-                "mean_loss",
-                "epsilon",
-            ]
-        )
-
-        for row in training_history:
-            writer.writerow(
-                [
-                    row["episode"],
-                    row["total_steps"],
-                    row["reward"],
-                    row["length"],
-                    row["mean_loss"],
-                    row["epsilon"],
-                ]
-            )
-
-    with open(
-        output_dir / "evaluation_metrics.csv",
-        "w",
-        newline="",
-    ) as file:
-        writer = csv.writer(file, lineterminator="\n")
-
-        writer.writerow(
-            [
-                "episode",
-                "total_steps",
-                "average_reward",
-                "average_length",
-            ]
-        )
-
-        for row in evaluation_history:
-            writer.writerow(
-                [
-                    row["episode"],
-                    row["total_steps"],
-                    row["average_reward"],
-                    row["average_length"],
-                ]
-            )
-
-    torch.save(
-        online_network.state_dict(),
-        output_dir / "final_q_network.pt",
-    )
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def main():
-    random.seed(SEED)
-    torch.manual_seed(SEED)
+    args = parse_args()
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
 
-    train_env = gym.make(
-        ENV_NAME
+    run_name = f"cartpole_seed{args.seed}"
+    output_dir = RUNS_DIR / run_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    monitor_seeds = list(
+        range(
+            CONFIG["monitor_seed_start"],
+            CONFIG["monitor_seed_start"]
+            + CONFIG["monitor_episodes"],
+        )
     )
 
-    eval_env = gym.make(
-        ENV_NAME
-    )
+    train_env = gym.make(CONFIG["environment"])
+    eval_env = gym.make(CONFIG["environment"])
+    train_env.action_space.seed(args.seed)
 
-    train_env.reset(
-        seed=SEED
-    )
-
-    eval_env.reset(
-        seed=SEED + 1
-    )
-
-    train_env.action_space.seed(
-        SEED
-    )
-
-    eval_env.action_space.seed(
-        SEED + 1
-    )
-
-    state_dim = (
-        train_env.observation_space.shape[0]
-    )
-
-    action_dim = (
-        train_env.action_space.n
-    )
-
-    print(
-        "Environment:",
-        ENV_NAME,
-    )
-
-    print(
-        "State dimension:",
-        state_dim,
-    )
-
-    print(
-        "Action dimension:",
-        action_dim,
-    )
-
-    print(
-        "Loss:",
-        LOSS_TYPE,
-    )
+    state_dim = train_env.observation_space.shape[0]
+    action_dim = train_env.action_space.n
 
     online_network = QNetwork(
-        state_dim=state_dim,
-        action_dim=action_dim,
-        hidden_dim=HIDDEN_DIM,
+        state_dim,
+        action_dim,
+        CONFIG["hidden_dims"],
     )
-
     target_network = QNetwork(
-        state_dim=state_dim,
-        action_dim=action_dim,
-        hidden_dim=HIDDEN_DIM,
+        state_dim,
+        action_dim,
+        CONFIG["hidden_dims"],
     )
 
     optimizer = torch.optim.Adam(
         online_network.parameters(),
-        lr=LEARNING_RATE,
+        lr=CONFIG["learning_rate"],
     )
+    replay_buffer = ReplayBuffer(CONFIG["buffer_capacity"])
 
-    replay_buffer = ReplayBuffer(
-        capacity=BUFFER_CAPACITY,
-    )
-
-    output_dir = get_output_dir()
+    print("Environment:", CONFIG["environment"])
+    print("Training seed:", args.seed)
+    print("Run:", run_name)
 
     (
         training_history,
@@ -249,80 +119,68 @@ def main():
         target_network=target_network,
         optimizer=optimizer,
         replay_buffer=replay_buffer,
-        num_episodes=NUM_EPISODES,
-        gamma=GAMMA,
-        batch_size=BATCH_SIZE,
-        min_buffer_size=MIN_BUFFER_SIZE,
-        epsilon_start=EPSILON_START,
-        epsilon_end=EPSILON_END,
-        epsilon_decay_steps=EPSILON_DECAY_STEPS,
-        target_sync_every=TARGET_SYNC_EVERY,
-        eval_every=EVAL_EVERY,
-        eval_episodes=EVAL_EPISODES,
-        checkpoint_path=(
-            output_dir
-            / "best_q_network.pt"
-        ),
-        loss_type=LOSS_TYPE,
+        num_episodes=CONFIG["max_episodes"],
+        gamma=CONFIG["gamma"],
+        batch_size=CONFIG["batch_size"],
+        min_buffer_size=CONFIG["min_buffer_size"],
+        epsilon_start=CONFIG["epsilon_start"],
+        epsilon_end=CONFIG["epsilon_end"],
+        epsilon_decay_steps=CONFIG["epsilon_decay_steps"],
+        train_frequency=CONFIG["train_frequency"],
+        target_update_mode=CONFIG["target_update"],
+        target_sync_every=CONFIG["target_sync_every"],
+        target_tau=CONFIG["target_tau"],
+        eval_every=CONFIG["eval_every"],
+        eval_seeds=monitor_seeds,
+        checkpoint_path=output_dir / "best_q_network.pt",
+        loss_type=CONFIG["loss"],
+        gradient_clip_norm=CONFIG["gradient_clip_norm"],
+        training_seed=args.seed,
+        early_stopping_reward=CONFIG["early_stopping_reward"],
+        early_stopping_patience=CONFIG["early_stopping_patience"],
     )
 
     train_env.close()
     eval_env.close()
 
-    save_results(
-        training_history=training_history,
-        evaluation_history=evaluation_history,
-        online_network=online_network,
-        output_dir=output_dir,
+    torch.save(
+        online_network.state_dict(),
+        output_dir / "final_q_network.pt",
+    )
+
+    completed_episodes = len(training_history)
+
+    config = {
+        **CONFIG,
+        "run_name": run_name,
+        "seed": args.seed,
+        "num_episodes": completed_episodes,
+        "early_stopped": completed_episodes < CONFIG["max_episodes"],
+        "environment_steps": total_steps,
+        "optimizer_updates": updates,
+        "checkpoint_selection": (
+            "best checkpoint on fixed monitor seeds 2100-2119; "
+            "best/final resolved by evaluate_results.py on validation seeds"
+        ),
+    }
+
+    with open(output_dir / "config.json", "w") as file:
+        json.dump(config, file, indent=4)
+
+    save_csv(
+        output_dir / "training_metrics.csv",
+        training_history,
+    )
+    save_csv(
+        output_dir / "evaluation_metrics.csv",
+        evaluation_history,
     )
 
     print("\nTraining completed")
-
-    print(
-        "Episodes:",
-        len(training_history),
-    )
-
-    print(
-        "Environment steps:",
-        total_steps,
-    )
-
-    print(
-        "Optimizer updates:",
-        updates,
-    )
-
-    print(
-        "Evaluations:",
-        len(evaluation_history),
-    )
-
-    print(
-        "Artifacts:",
-        output_dir,
-    )
-
-    if evaluation_history:
-        best = max(
-            evaluation_history,
-            key=lambda row:
-                row["average_reward"],
-        )
-
-        final = evaluation_history[-1]
-
-        print(
-            "Best evaluation:",
-            f"episode={best['episode']}",
-            f"reward={best['average_reward']:.2f}",
-        )
-
-        print(
-            "Final evaluation:",
-            f"episode={final['episode']}",
-            f"reward={final['average_reward']:.2f}",
-        )
+    print("Episodes:", completed_episodes)
+    print("Environment steps:", total_steps)
+    print("Optimizer updates:", updates)
+    print("Artifacts:", output_dir)
 
 
 if __name__ == "__main__":

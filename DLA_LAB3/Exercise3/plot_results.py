@@ -1,6 +1,8 @@
 import csv
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
@@ -8,726 +10,268 @@ BASE_DIR = Path(__file__).parent
 RUNS_DIR = BASE_DIR / "runs"
 RESULTS_DIR = BASE_DIR / "results"
 PLOTS_DIR = BASE_DIR / "plots"
-
-
-CARTPOLE_RUNS = {
-    "MSE, lr=1e-3": (
-        RUNS_DIR
-        / "cartpole_dqn_pilot_seed42"
-        / "evaluation_metrics.csv"
-    ),
-    "MSE, lr=5e-4": (
-        RUNS_DIR
-        / "cartpole_dqn_lr0.0005_seed42"
-        / "evaluation_metrics.csv"
-    ),
-    "Huber, lr=5e-4": (
-        RUNS_DIR
-        / "cartpole_dqn_huber_lr0.0005_seed42"
-        / "evaluation_metrics.csv"
-    ),
-}
-
-
-LUNARLANDER_EVAL_PATH = (
-    RUNS_DIR
-    / "lunarlander_dqn_final_1000ep_seed42"
-    / "evaluation_metrics.csv"
-)
-
-LUNARLANDER_TRAIN_PATH = (
-    RUNS_DIR
-    / "lunarlander_dqn_final_1000ep_seed42"
-    / "training_metrics.csv"
-)
-
-ROBUST_SUMMARY_PATH = (
-    RESULTS_DIR
-    / "robust_evaluation_summary.csv"
-)
-
-ROBUST_EPISODES_PATH = (
-    RESULTS_DIR
-    / "robust_evaluation_episodes.csv"
-)
+SEEDS = [42, 123, 456]
 
 
 def read_csv(path):
     if not path.exists():
-        raise FileNotFoundError(
-            f"Missing CSV file: {path}"
-        )
+        raise FileNotFoundError(f"Missing CSV file: {path}")
 
-    with open(
-        path,
-        newline="",
-    ) as file:
-        return list(
-            csv.DictReader(file)
-        )
+    with open(path, newline="") as file:
+        return list(csv.DictReader(file))
 
 
 def moving_average(values, window):
     if window <= 0:
-        raise ValueError(
-            "window must be positive"
-        )
+        raise ValueError("window must be positive")
 
     averages = []
-
     running_sum = 0.0
 
     for index, value in enumerate(values):
         running_sum += value
-
         if index >= window:
-            running_sum -= (
-                values[index - window]
-            )
+            running_sum -= values[index - window]
 
-        current_window = min(
-            index + 1,
-            window,
-        )
-
-        averages.append(
-            running_sum / current_window
-        )
+        current_window = min(index + 1, window)
+        averages.append(running_sum / current_window)
 
     return averages
 
 
-def plot_cartpole_evaluation():
-    plt.figure(
-        figsize=(9, 5)
-    )
+def run_dir(prefix, seed):
+    return RUNS_DIR / f"{prefix}_seed{seed}"
 
-    for label, path in CARTPOLE_RUNS.items():
-        rows = read_csv(path)
 
-        episodes = [
-            int(row["episode"])
-            for row in rows
-        ]
+def plot_training_reward(environment, prefix, window, threshold, filename):
+    fig, ax = plt.subplots(figsize=(9, 5))
 
-        rewards = [
-            float(row["average_reward"])
-            for row in rows
-        ]
+    for seed in SEEDS:
+        rows = read_csv(run_dir(prefix, seed) / "training_metrics.csv")
+        episodes = [int(row["episode"]) for row in rows]
+        rewards = [float(row["reward"]) for row in rows]
+        smoothed = moving_average(rewards, window)
 
-        plt.plot(
+        ax.plot(
+            episodes,
+            smoothed,
+            linewidth=1.7,
+            label=f"seed {seed}",
+        )
+
+    ax.axhline(threshold, linestyle="--", linewidth=1, label=f"reference {threshold:g}")
+    ax.set_xlabel("Training episode")
+    ax.set_ylabel(f"Reward ({window}-episode moving average)")
+    ax.set_title(f"{environment} — Training reward")
+    ax.grid(alpha=0.25)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(PLOTS_DIR / filename, dpi=200)
+    plt.close(fig)
+
+
+def plot_evaluation_curve(environment, prefix, threshold, filename, ylim=None):
+    fig, ax = plt.subplots(figsize=(9, 5))
+
+    for seed in SEEDS:
+        rows = read_csv(run_dir(prefix, seed) / "evaluation_metrics.csv")
+        episodes = [int(row["episode"]) for row in rows]
+        rewards = [float(row["average_reward"]) for row in rows]
+
+        ax.plot(
             episodes,
             rewards,
             marker="o",
-            markersize=3,
-            linewidth=1.5,
-            label=label,
+            markersize=2.5,
+            linewidth=1.4,
+            label=f"seed {seed}",
         )
 
-    plt.xlabel(
-        "Training episode"
-    )
-
-    plt.ylabel(
-        "Greedy evaluation average reward"
-    )
-
-    plt.title(
-        "CartPole-v1 — DQN evaluation during training"
-    )
-
-    plt.ylim(
-        bottom=0,
-        top=500,
-    )
-
-    plt.grid(
-        alpha=0.3
-    )
-
-    plt.legend()
-
-    plt.tight_layout()
-
-    path = (
-        PLOTS_DIR
-        / "cartpole_evaluation_comparison.png"
-    )
-
-    plt.savefig(
-        path,
-        dpi=200,
-    )
-
-    plt.close()
-
-    return path
+    ax.axhline(threshold, linestyle="--", linewidth=1, label=f"reference {threshold:g}")
+    ax.set_xlabel("Training episode")
+    ax.set_ylabel("Greedy evaluation mean reward")
+    ax.set_title(f"{environment} — Evaluation during training")
+    if ylim is not None:
+        ax.set_ylim(*ylim)
+    ax.grid(alpha=0.25)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(PLOTS_DIR / filename, dpi=200)
+    plt.close(fig)
 
 
-def plot_cartpole_robust_summary():
-    rows = read_csv(
-        ROBUST_SUMMARY_PATH
-    )
-
-    cartpole_rows = [
+def environment_summary(environment):
+    rows = [
         row
-        for row in rows
-        if row["environment"]
-        == "CartPole-v1"
+        for row in read_csv(RESULTS_DIR / "final_test_summary.csv")
+        if row["environment"] == environment
     ]
+    rows.sort(key=lambda row: int(row["training_seed"]))
+    return rows
 
-    labels = [
-        "MSE\n1e-3\nfinal",
-        "MSE\n5e-4\nbest",
-        "MSE\n5e-4\nfinal",
-        "Huber\n5e-4\nbest",
-        "Huber\n5e-4\nfinal",
-    ]
 
-    if len(cartpole_rows) != len(labels):
-        raise ValueError(
-            "Unexpected number of CartPole "
-            "summary rows"
-        )
-
-    means = [
-        float(row["mean_reward"])
-        for row in cartpole_rows
-    ]
-
-    standard_deviations = [
-        float(row["std_reward"])
-        for row in cartpole_rows
-    ]
-
-    positions = list(
-        range(len(labels))
-    )
-
-    plt.figure(
-        figsize=(9, 5)
-    )
-
-    plt.bar(
-        positions,
-        means,
-        yerr=standard_deviations,
-        capsize=5,
-    )
-
-    plt.xticks(
-        positions,
-        labels,
-    )
-
-    plt.ylabel(
-        "Reward over 100 greedy episodes"
-    )
-
-    plt.title(
-        "CartPole-v1 — Robust checkpoint evaluation"
-    )
-
-    plt.grid(
-        axis="y",
-        alpha=0.3,
-    )
-
-    plt.tight_layout()
-
-    path = (
-        PLOTS_DIR
-        / "cartpole_robust_comparison.png"
-    )
-
-    plt.savefig(
-        path,
-        dpi=200,
-    )
-
-    plt.close()
-
-    return path
-
-
-def plot_lunarlander_evaluation():
-    rows = read_csv(
-        LUNARLANDER_EVAL_PATH
-    )
-
-    episodes = [
-        int(row["episode"])
-        for row in rows
-    ]
-
-    rewards = [
-        float(row["average_reward"])
-        for row in rows
-    ]
-
-    plt.figure(
-        figsize=(10, 5)
-    )
-
-    plt.plot(
-        episodes,
-        rewards,
-        marker="o",
-        markersize=3,
-        linewidth=1.5,
-    )
-
-    plt.axhline(
-        y=0,
-        linestyle="--",
-        linewidth=1,
-        label="Zero reward",
-    )
-
-    plt.xlabel(
-        "Training episode"
-    )
-
-    plt.ylabel(
-        "Greedy evaluation average reward"
-    )
-
-    plt.title(
-        "LunarLander-v3 — DQN evaluation during training"
-    )
-
-    plt.grid(
-        alpha=0.3
-    )
-
-    plt.legend()
-
-    plt.tight_layout()
-
-    path = (
-        PLOTS_DIR
-        / "lunarlander_evaluation_curve.png"
-    )
-
-    plt.savefig(
-        path,
-        dpi=200,
-    )
-
-    plt.close()
-
-    return path
-
-
-def plot_lunarlander_training_reward():
-    rows = read_csv(
-        LUNARLANDER_TRAIN_PATH
-    )
-
-    episodes = [
-        int(row["episode"])
-        for row in rows
-    ]
-
-    rewards = [
-        float(row["reward"])
-        for row in rows
-    ]
-
-    rolling_rewards = moving_average(
-        rewards,
-        window=50,
-    )
-
-    plt.figure(
-        figsize=(10, 5)
-    )
-
-    plt.plot(
-        episodes,
-        rewards,
-        linewidth=0.7,
-        alpha=0.25,
-        label="Episode reward",
-    )
-
-    plt.plot(
-        episodes,
-        rolling_rewards,
-        linewidth=2,
-        label="50-episode moving average",
-    )
-
-    plt.axhline(
-        y=0,
-        linestyle="--",
-        linewidth=1,
-    )
-
-    plt.xlabel(
-        "Training episode"
-    )
-
-    plt.ylabel(
-        "Training reward"
-    )
-
-    plt.title(
-        "LunarLander-v3 — Training reward"
-    )
-
-    plt.grid(
-        alpha=0.3
-    )
-
-    plt.legend()
-
-    plt.tight_layout()
-
-    path = (
-        PLOTS_DIR
-        / "lunarlander_training_reward.png"
-    )
-
-    plt.savefig(
-        path,
-        dpi=200,
-    )
-
-    plt.close()
-
-    return path
-
-
-def plot_lunarlander_td_loss():
-    rows = read_csv(
-        LUNARLANDER_TRAIN_PATH
-    )
-
-    episodes = []
-    losses = []
-
-    for row in rows:
-        mean_loss = row["mean_loss"]
-
-        if mean_loss in (
-            "",
-            "None",
-        ):
-            continue
-
-        episodes.append(
-            int(row["episode"])
-        )
-
-        losses.append(
-            float(mean_loss)
-        )
-
-    rolling_losses = moving_average(
-        losses,
-        window=25,
-    )
-
-    plt.figure(
-        figsize=(10, 5)
-    )
-
-    plt.plot(
-        episodes,
-        losses,
-        linewidth=0.7,
-        alpha=0.25,
-        label="Episode mean TD loss",
-    )
-
-    plt.plot(
-        episodes,
-        rolling_losses,
-        linewidth=2,
-        label="25-episode moving average",
-    )
-
-    plt.xlabel(
-        "Training episode"
-    )
-
-    plt.ylabel(
-        "Mean TD loss"
-    )
-
-    plt.title(
-        "LunarLander-v3 — TD-loss evolution"
-    )
-
-    plt.grid(
-        alpha=0.3
-    )
-
-    plt.legend()
-
-    plt.tight_layout()
-
-    path = (
-        PLOTS_DIR
-        / "lunarlander_td_loss.png"
-    )
-
-    plt.savefig(
-        path,
-        dpi=200,
-    )
-
-    plt.close()
-
-    return path
-
-
-def plot_lunarlander_robust_summary():
-    rows = read_csv(
-        ROBUST_SUMMARY_PATH
-    )
-
-    lunar_rows = [
+def environment_episodes(environment):
+    rows = [
         row
-        for row in rows
-        if row["environment"]
-        == "LunarLander-v3"
+        for row in read_csv(RESULTS_DIR / "final_test_episodes.csv")
+        if row["environment"] == environment
     ]
-
-    labels = [
-        "500 ep.\nfinal",
-        "1000 ep.\ntraining-best",
-        "1000 ep.\nfinal",
-    ]
-
-    if len(lunar_rows) != len(labels):
-        raise ValueError(
-            "Unexpected number of LunarLander "
-            "summary rows"
-        )
-
-    means = [
-        float(row["mean_reward"])
-        for row in lunar_rows
-    ]
-
-    standard_deviations = [
-        float(row["std_reward"])
-        for row in lunar_rows
-    ]
-
-    positions = list(
-        range(len(labels))
-    )
-
-    plt.figure(
-        figsize=(8, 5)
-    )
-
-    plt.bar(
-        positions,
-        means,
-        yerr=standard_deviations,
-        capsize=5,
-    )
-
-    plt.xticks(
-        positions,
-        labels,
-    )
-
-    plt.axhline(
-        y=0,
-        linestyle="--",
-        linewidth=1,
-    )
-
-    plt.ylabel(
-        "Reward over 100 greedy episodes"
-    )
-
-    plt.title(
-        "LunarLander-v3 — Robust checkpoint evaluation"
-    )
-
-    plt.grid(
-        axis="y",
-        alpha=0.3,
-    )
-
-    plt.tight_layout()
-
-    path = (
-        PLOTS_DIR
-        / "lunarlander_robust_comparison.png"
-    )
-
-    plt.savefig(
-        path,
-        dpi=200,
-    )
-
-    plt.close()
-
-    return path
+    return rows
 
 
-def plot_selected_reward_distributions():
-    rows = read_csv(
-        ROBUST_EPISODES_PATH
-    )
+def plot_robust_test(environment, threshold, filename, ylim=None):
+    rows = environment_summary(environment)
+    labels = [row["training_seed"] for row in rows]
+    means = [float(row["mean_reward"]) for row in rows]
+    stds = [float(row["std_reward"]) for row in rows]
 
-    selected_rows = [
-        row
-        for row in rows
-        if row["selected"] == "True"
-    ]
+    fig, ax = plt.subplots(figsize=(7.5, 4.8))
+    ax.bar(labels, means, yerr=stds, capsize=5)
+    ax.axhline(threshold, linestyle="--", linewidth=1, label=f"reference {threshold:g}")
+    ax.set_xlabel("Training seed")
+    ax.set_ylabel("Reward over 100 unseen test episodes")
+    ax.set_title(f"{environment} — Robust final test")
+    if ylim is not None:
+        ax.set_ylim(*ylim)
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(PLOTS_DIR / filename, dpi=200)
+    plt.close(fig)
 
-    checkpoint_ids = []
 
-    for row in selected_rows:
-        checkpoint_id = row[
-            "checkpoint_id"
-        ]
+def plot_reward_distribution(environment, threshold, filename, ylim=None):
+    rows = environment_episodes(environment)
+    data = []
 
-        if (
-            checkpoint_id
-            not in checkpoint_ids
-        ):
-            checkpoint_ids.append(
-                checkpoint_id
-            )
-
-    if len(checkpoint_ids) != 2:
-        raise ValueError(
-            "Expected exactly two selected "
-            "checkpoints"
-        )
-
-    for checkpoint_id in checkpoint_ids:
-        checkpoint_rows = [
-            row
-            for row in selected_rows
-            if row["checkpoint_id"]
-            == checkpoint_id
-        ]
-
+    for seed in SEEDS:
         rewards = [
             float(row["reward"])
-            for row in checkpoint_rows
+            for row in rows
+            if int(row["training_seed"]) == seed
         ]
+        data.append(rewards)
 
-        environment_name = (
-            checkpoint_rows[0][
-                "environment"
-            ]
+    fig, ax = plt.subplots(figsize=(7.5, 4.8))
+    ax.boxplot(data, tick_labels=[str(seed) for seed in SEEDS], showmeans=True)
+    ax.axhline(threshold, linestyle="--", linewidth=1, label=f"reference {threshold:g}")
+    ax.set_xlabel("Training seed")
+    ax.set_ylabel("Episode reward")
+    ax.set_title(f"{environment} — Test reward distribution")
+    if ylim is not None:
+        ax.set_ylim(*ylim)
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(PLOTS_DIR / filename, dpi=200)
+    plt.close(fig)
+
+
+def plot_td_loss(environment, prefix, window, filename):
+    fig, ax = plt.subplots(figsize=(9, 5))
+
+    for seed in SEEDS:
+        rows = read_csv(run_dir(prefix, seed) / "training_metrics.csv")
+        episodes = []
+        losses = []
+
+        for row in rows:
+            value = row["mean_loss"]
+            if value in ("", "None"):
+                continue
+            episodes.append(int(row["episode"]))
+            losses.append(float(value))
+
+        smoothed = moving_average(losses, window)
+        ax.plot(
+            episodes,
+            smoothed,
+            linewidth=1.6,
+            label=f"seed {seed}",
         )
 
-        plt.figure(
-            figsize=(8, 5)
-        )
-
-        plt.hist(
-            rewards,
-            bins=15,
-            edgecolor="black",
-            alpha=0.8,
-        )
-
-        plt.xlabel(
-            "Episode reward"
-        )
-
-        plt.ylabel(
-            "Number of episodes"
-        )
-
-        plt.title(
-            f"{environment_name} — "
-            f"Selected checkpoint reward distribution"
-        )
-
-        plt.grid(
-            axis="y",
-            alpha=0.3,
-        )
-
-        plt.tight_layout()
-
-        if environment_name == "CartPole-v1":
-            filename = (
-                "cartpole_selected_reward_distribution.png"
-            )
-        else:
-            filename = (
-                "lunarlander_selected_reward_distribution.png"
-            )
-
-        path = (
-            PLOTS_DIR
-            / filename
-        )
-
-        plt.savefig(
-            path,
-            dpi=200,
-        )
-
-        plt.close()
+    ax.set_xlabel("Training episode")
+    ax.set_ylabel(f"Mean TD loss ({window}-episode moving average)")
+    ax.set_title(f"{environment} — TD-loss evolution")
+    ax.grid(alpha=0.25)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(PLOTS_DIR / filename, dpi=200)
+    plt.close(fig)
 
 
 def main():
-    PLOTS_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
+    PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Remove only the previous compact plots to avoid stale duplicates.
+    for stale_name in [
+        "cartpole_training.png",
+        "cartpole_test.png",
+        "lunarlander_training.png",
+        "lunarlander_test.png",
+    ]:
+        stale_path = PLOTS_DIR / stale_name
+        if stale_path.exists():
+            stale_path.unlink()
+
+    plot_training_reward(
+        "CartPole-v1",
+        "cartpole",
+        window=25,
+        threshold=475,
+        filename="cartpole_training_reward.png",
+    )
+    plot_evaluation_curve(
+        "CartPole-v1",
+        "cartpole",
+        threshold=475,
+        filename="cartpole_evaluation_curve.png",
+        ylim=(0, 520),
+    )
+    plot_robust_test(
+        "CartPole-v1",
+        threshold=475,
+        filename="cartpole_robust_test.png",
+        ylim=(0, 520),
+    )
+    plot_reward_distribution(
+        "CartPole-v1",
+        threshold=475,
+        filename="cartpole_selected_reward_distribution.png",
+        ylim=(0, 520),
     )
 
-    created_paths = []
-
-    created_paths.append(
-        plot_cartpole_evaluation()
+    plot_training_reward(
+        "LunarLander-v3",
+        "lunarlander",
+        window=50,
+        threshold=200,
+        filename="lunarlander_training_reward.png",
+    )
+    plot_evaluation_curve(
+        "LunarLander-v3",
+        "lunarlander",
+        threshold=200,
+        filename="lunarlander_evaluation_curve.png",
+    )
+    plot_robust_test(
+        "LunarLander-v3",
+        threshold=200,
+        filename="lunarlander_robust_test.png",
+    )
+    plot_reward_distribution(
+        "LunarLander-v3",
+        threshold=200,
+        filename="lunarlander_selected_reward_distribution.png",
+    )
+    plot_td_loss(
+        "LunarLander-v3",
+        "lunarlander",
+        window=25,
+        filename="lunarlander_td_loss.png",
     )
 
-    created_paths.append(
-        plot_cartpole_robust_summary()
-    )
-
-    created_paths.append(
-        plot_lunarlander_evaluation()
-    )
-
-    created_paths.append(
-        plot_lunarlander_training_reward()
-    )
-
-    created_paths.append(
-        plot_lunarlander_td_loss()
-    )
-
-    created_paths.append(
-        plot_lunarlander_robust_summary()
-    )
-
-    plot_selected_reward_distributions()
-
-    created_paths.extend(
-        [
-            PLOTS_DIR
-            / "cartpole_selected_reward_distribution.png",
-
-            PLOTS_DIR
-            / "lunarlander_selected_reward_distribution.png",
-        ]
-    )
-
-    print("Plots created:")
-
-    for path in created_paths:
-        print(
-            "-",
-            path,
-        )
+    print("Plots saved in:", PLOTS_DIR)
 
 
 if __name__ == "__main__":

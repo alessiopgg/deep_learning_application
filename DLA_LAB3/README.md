@@ -1,21 +1,18 @@
 # Deep Learning Applications — Laboratorio 3
 
-Il Laboratorio 3 è dedicato allo studio di diversi metodi di **Deep Reinforcement Learning** attraverso tre esercizi sperimentali su ambienti Gymnasium.
+Il Laboratorio 3 studia metodi **policy-based** e **value-based** di Deep Reinforcement Learning attraverso tre esercizi progressivi su ambienti Gymnasium.
 
-Gli esperimenti analizzano algoritmi policy-based e value-based, tecniche di riduzione della varianza, strategie di esplorazione, stabilità del training e affidabilità dei protocolli di evaluation.
-
-Gli ambienti utilizzati sono principalmente `CartPole-v1` e `LunarLander-v3`.
+Il percorso parte dall'implementazione di **REINFORCE** su `CartPole-v1`, analizza due tecniche di riduzione della varianza e conclude con un **Deep Q-Network (DQN)** applicato a `CartPole-v1` e `LunarLander-v3`.
 
 ## Obiettivi del laboratorio
 
-Gli obiettivi principali del laboratorio sono:
+Il lavoro affronta tre domande principali:
 
-* implementare e valutare **REINFORCE** su `CartPole-v1`;
-* studiare tecniche di **variance reduction** per rendere il training più stabile e robusto;
-* implementare un **Deep Q-Network (DQN)** con Experience Replay e Target Network;
-* analizzare sperimentalmente stabilità, sensibilità agli iperparametri e robustezza dei checkpoint.
+* come apprende e quanto è stabile una policy addestrata con vanilla REINFORCE;
+* quanto Standardized Returns e una Learned Value Baseline riducono la varianza del Policy Gradient;
+* come Experience Replay e Target Q-Network permettono di applicare Deep Q-Learning a task con spazio delle azioni discreto.
 
-Il protocollo sperimentale separa training ed evaluation, utilizza seed controllati, conserva metriche e configurazioni delle run e integra valutazioni indipendenti su 100 episodi per verificare la robustezza dei modelli.
+Il protocollo sperimentale separa training ed evaluation, usa seed controllati e conserva configurazioni, metriche, checkpoint selezionati e risultati aggregati necessari alla riproduzione dell'analisi.
 
 ## Struttura del repository
 
@@ -54,12 +51,13 @@ DLA_LAB3/
     ├── lunarlander_main.py
     ├── evaluate_results.py
     ├── plot_results.py
+    ├── run_final.sh
     ├── runs/
     ├── results/
     └── plots/
 ```
 
-`models.py` e `reinforce.py` contengono componenti condivise utilizzate nelle implementazioni basate su REINFORCE, mentre il codice DQN è mantenuto nella directory dell'Exercise 3.
+`models.py` e `reinforce.py` contengono le componenti condivise dagli esercizi basati su REINFORCE; l'implementazione DQN è mantenuta interamente nella directory `Exercise3`.
 
 ## Esercizi
 
@@ -67,28 +65,17 @@ DLA_LAB3/
 
 L'[Exercise 1](Exercise1/README.md) implementa da zero **vanilla REINFORCE** su `CartPole-v1`.
 
-La policy è una rete fully connected:
+La policy è una rete:
 
 ```text
-4 → 64 → 2
+4 -> 64 -> 2
 ```
 
-che produce i logits di una distribuzione categorica sulle due azioni dell'ambiente.
+e viene aggiornata al termine di ogni trajectory utilizzando discounted return Monte Carlo.
 
-Il training utilizza trajectory complete, discounted return Monte Carlo e un aggiornamento della policy per episodio.
+Lo studio sperimentale comprende più learning rate, cinque training seed, training da 1000 e 2000 episodi e robust evaluation indipendente dei checkpoint.
 
-Lo studio sperimentale analizza:
-
-* tre learning rate: `0.001`, `0.005`, `0.01`;
-* cinque training seed: `42`, `123`, `456`, `789`, `1000`;
-* training da 1000 episodi;
-* training esteso a 2000 episodi;
-* differenza tra best checkpoint e checkpoint finale;
-* robust evaluation indipendente su 100 episodi.
-
-Il confronto tra learning rate mostra una forte sensibilità del vanilla REINFORCE alla dimensione degli update: learning rate elevati possono produrre rapidamente policy molto efficaci, ma anche forti oscillazioni e successivi **policy collapse**.
-
-Con `lr=0.001`, aumentando il training budget da 1000 a 2000 episodi, il reward finale medio passa da:
+Con `lr=0.001`, il training esteso porta il reward finale medio da:
 
 ```text
 457.35 ± 27.44
@@ -100,58 +87,33 @@ a:
 484.79 ± 14.26
 ```
 
-La robust evaluation dei checkpoint finali sulle cinque training seed produce:
+La robust evaluation dei checkpoint finali produce:
 
 ```text
 486.15 ± 8.01
 ```
 
-con un success rate medio a reward 500 pari a `89.6%`.
+con success rate medio a reward `500` pari a `89.6%`.
 
 ### Exercise 2 — Variance Reduction in REINFORCE
 
-L'[Exercise 2](Exercise2/README.md) studia due tecniche di riduzione della varianza del policy gradient su `CartPole-v1`:
+L'[Exercise 2](Exercise2/README.md) confronta vanilla REINFORCE con due tecniche di riduzione della varianza:
 
 ```text
 Standardized Returns
 Learned Value Baseline
 ```
 
-La standardizzazione utilizza return centrati e normalizzati all'interno dell'episodio:
+La Value Baseline introduce una seconda rete:
 
 ```text
-(G_t - mean(G)) / (std(G) + epsilon)
+4 -> 64 -> 1
 ```
 
-La Value Baseline introduce invece una rete:
+che approssima `V(s)` e permette di utilizzare l'advantage:
 
 ```text
-ValueNetwork
-4 → 64 → 1
-```
-
-che approssima il valore dello stato e permette di utilizzare come learning signal:
-
-```text
-G_t - V(S_t)
-```
-
-Gli esperimenti utilizzano:
-
-```text
-training episodes = 2000
-policy learning rate = 0.001
-gamma = 0.99
-```
-
-con cinque training seed:
-
-```text
-42
-123
-456
-789
-1000
+G_t - V(s_t)
 ```
 
 Nella robust evaluation dei checkpoint finali:
@@ -162,142 +124,73 @@ Nella robust evaluation dei checkpoint finali:
 | Standardized Returns | 496.00 ± 5.33 | 97.0% |
 | **Value Baseline** | **498.68 ± 1.22** | **98.6%** |
 
-La Value Baseline raggiunge inoltre per la prima volta un'evaluation media di 500 intorno all'episodio `945`.
-
-I risultati mostrano che entrambe le tecniche migliorano la stabilità del training e la robustezza finale, con la Value Baseline che ottiene i risultati più consistenti nel protocollo sperimentale utilizzato.
+Il confronto mostra che entrambe le tecniche migliorano la stabilità, con la Value Baseline che produce il comportamento più consistente nel protocollo utilizzato.
 
 ### Exercise 3 — Deep Q-Learning su CartPole e LunarLander
 
-L'[Exercise 3](Exercise3/README.md) implementa un **Deep Q-Network (DQN)** per ambienti con spazio delle azioni discreto.
-
-L'algoritmo viene applicato a:
+L'[Exercise 3](Exercise3/README.md) implementa la variante **3.2 — Deep Q-Learning** con:
 
 ```text
-CartPole-v1
-LunarLander-v3
+epsilon-greedy exploration
+Experience Replay
+Temporal-Difference targets
+Target Q-Network
 ```
 
-L'implementazione comprende:
-
-* Q-Network;
-* epsilon-greedy exploration;
-* Experience Replay;
-* Replay Buffer;
-* Temporal-Difference targets;
-* Target Q-Network;
-* sincronizzazione periodica della target network;
-* evaluation greedy indipendente dal training.
-
-Per CartPole il modello utilizza:
+La stessa implementazione DQN viene utilizzata per entrambi gli ambienti con architettura:
 
 ```text
-4 → 64 → 2
+CartPole-v1:     4 -> 128 -> 128 -> 2
+LunarLander-v3:  8 -> 128 -> 128 -> 4
 ```
 
-Per LunarLander utilizza:
+Le configurazioni finali vengono valutate su tre training seed (`42`, `123`, `456`) e su 100 episodi di test per seed.
 
-```text
-8 → 64 → 4
-```
+| Ambiente | Reward medio tra training seed | Successo finale |
+|---|---:|---:|
+| `CartPole-v1` | **477.72 ± 31.51** | **88.0%** con reward >=475 |
+| `LunarLander-v3` | **275.96 ± 5.38** | **97.7%** con reward >=200 |
 
-### CartPole-v1
+Su CartPole, due dei tre training seed raggiungono reward `500` su tutti i 100 episodi di test; complessivamente l'`86.3%` dei 300 episodi finali raggiunge esattamente `500`.
 
-Su CartPole vengono confrontati learning rate e loss differenti.
-
-La configurazione selezionata utilizza:
-
-```text
-learning rate = 5e-4
-loss          = MSE
-```
-
-e raggiunge nella robust evaluation su 100 episodi greedy:
-
-```text
-Mean reward = 280.84
-Std reward  = 75.88
-```
-
-### LunarLander-v3
-
-Su LunarLander viene inizialmente eseguito un training da 500 episodi, successivamente esteso a 1000 episodi.
-
-Il checkpoint finale della run da 1000 episodi ottiene:
-
-```text
-Mean reward   = 172.68
-Std reward    = 70.02
-Median reward = 184.82
-```
-
-con:
-
-```text
-Positive episodes = 96%
-Reward >= 100     = 84%
-Reward >= 200     = 32%
-```
-
-La robust evaluation mostra inoltre che la selezione del checkpoint basata su poche evaluation periodiche può essere rumorosa. Per questo motivo i modelli finali vengono confrontati anche su 100 episodi indipendenti.
+Su LunarLander il comportamento rimane consistente tra le tre inizializzazioni, con medie per seed comprese tra `268.38` e `280.38`.
 
 ## Ambiente e riproducibilità
 
-Il laboratorio è stato sviluppato e testato su **Ubuntu tramite WSL2**, utilizzando **Conda/Miniforge**.
+L'ambiente Conda di riferimento è definito in [`environment.yml`](environment.yml).
 
-L'ambiente utilizzato è definito nel file:
-
-```text
-environment.yml
-```
-
-e può essere ricreato con:
+Dalla root del repository:
 
 ```bash
-conda env create -f environment.yml
+conda env create -f DLA_LAB3/environment.yml
 conda activate DRL
+cd DLA_LAB3
 ```
 
-La configurazione testata utilizza principalmente:
+Versioni principali registrate:
+
+* Python 3.12.13
+* PyTorch 2.13.0
+* Gymnasium 1.3.0
+* NumPy 2.5.1
+* Matplotlib 3.11.1
+* pygame 2.6.1
+* Box2D 2.3.10
+* SWIG 4.4.1
+
+Gli Exercise 1 e 2 utilizzano cinque training seed:
 
 ```text
-Python      3.12.13
-PyTorch     2.13.0
-Gymnasium   1.3.0
-NumPy       2.5.1
-Matplotlib  3.11.1
-pygame      2.6.1
-Box2D       2.3.10
-SWIG        4.4.1
+42, 123, 456, 789, 1000
 ```
 
-Nell'ambiente utilizzato per gli esperimenti, PyTorch disponeva inoltre di supporto **CUDA 12.9**.
-
-Gli ambienti utilizzati sono:
+L'Exercise 3 utilizza:
 
 ```text
-CartPole-v1
-LunarLander-v3
+42, 123, 456
 ```
 
-Negli esperimenti multi-seed vengono utilizzate le training seed:
-
-```text
-42
-123
-456
-789
-1000
-```
-
-Le robust evaluation utilizzano 100 episodi con seed:
-
-```text
-1000–1099
-```
-
-La riproducibilità viene gestita attraverso seed espliciti, configurazioni salvate, metriche persistenti e valutazioni separate dal training.
-
-Le differenze dovute alla natura stocastica degli algoritmi di reinforcement learning rimangono parte integrante dell'analisi sperimentale.
+Le evaluation robuste vengono eseguite con seed espliciti e ambienti separati dal training. I risultati numerici riportati derivano dagli artifact delle run effettivamente eseguite; non viene assunto determinismo bit-a-bit tra piattaforme differenti.
 
 ## Entry point principali
 
@@ -318,10 +211,10 @@ python -m Exercise1.main \
   --eval-episodes 20
 ```
 
-Training esteso:
+Campagna multi-seed estesa:
 
 ```bash
-./Exercise1/run_extended_2000.sh
+bash Exercise1/run_extended_2000.sh
 ```
 
 Robust evaluation:
@@ -330,7 +223,7 @@ Robust evaluation:
 python -m Exercise1.evaluate_checkpoints
 ```
 
-Generazione dei grafici:
+Grafici:
 
 ```bash
 python -m Exercise1.plot_results
@@ -374,7 +267,7 @@ Robust evaluation:
 python -m Exercise2.evaluate_checkpoints
 ```
 
-Generazione dei grafici:
+Grafici:
 
 ```bash
 python -m Exercise2.plot_results
@@ -382,37 +275,43 @@ python -m Exercise2.plot_results
 
 ### Exercise 3
 
-Training DQN su CartPole:
+Campagna finale completa:
 
 ```bash
-python -m Exercise3.main
+bash Exercise3/run_final.sh
 ```
 
-Training DQN su LunarLander:
+Training CartPole per una singola seed:
 
 ```bash
-python -m Exercise3.lunarlander_main
+python -m Exercise3.main --seed 42
 ```
 
-Robust evaluation:
+Training LunarLander per una singola seed:
+
+```bash
+python -m Exercise3.lunarlander_main --seed 42
+```
+
+Evaluation finale:
 
 ```bash
 python -m Exercise3.evaluate_results
 ```
 
-Generazione dei grafici:
+Grafici:
 
 ```bash
 python -m Exercise3.plot_results
 ```
 
-I dettagli relativi agli iperparametri, al protocollo sperimentale e all'interpretazione dei risultati sono documentati nei README specifici dei singoli esercizi.
+I dettagli relativi a metodo, configurazioni, selezione dei checkpoint e test finale sono documentati nei README specifici dei singoli esercizi.
 
 ## Tracking degli esperimenti
 
-Il Laboratorio 3 utilizza un tracking locale basato sugli artifact prodotti dalle run.
+Il Laboratorio 3 utilizza tracking locale basato sugli artifact delle run.
 
-Negli esperimenti basati su REINFORCE vengono registrati principalmente:
+Gli esperimenti REINFORCE registrano principalmente:
 
 ```text
 config.json
@@ -420,34 +319,41 @@ training_metrics.csv
 evaluation_metrics.csv
 ```
 
-insieme ai checkpoint delle reti.
+insieme ai checkpoint necessari alle robust evaluation.
 
-Le robust evaluation producono CSV separati con risultati per episodio e statistiche aggregate.
+L'Exercise 3 conserva per ciascuna run finale:
 
-Gli esperimenti DQN conservano analogamente metriche delle run, risultati delle valutazioni robuste e grafici utilizzati nell'analisi.
+```text
+config.json
+training_metrics.csv
+evaluation_metrics.csv
+selected_q_network.pt
+```
 
-I grafici finali vengono generati a partire dagli artifact persistiti, evitando di ripetere training o evaluation soltanto per produrre le visualizzazioni.
+e raccoglie i risultati finali in CSV separati a livello di episodio, checkpoint e aggregato.
+
+I grafici vengono prodotti dagli artifact persistiti senza ripetere il training.
 
 ## Politica del repository
 
-Per mantenere il repository leggero vengono generalmente esclusi dal controllo versione:
+Per mantenere il repository leggero vengono esclusi dal controllo versione:
 
-* checkpoint e pesi dei modelli di grandi dimensioni (`.pt`, `.pth`, `.ckpt`);
-* directory di checkpoint non necessarie alla riproduzione dei risultati;
+* dataset;
+* checkpoint e pesi non necessari alla consegna;
 * output generici e log locali;
-* array e feature di grandi dimensioni (`.npy`, `.npz`);
+* array e feature di grandi dimensioni;
 * cache;
 * ambienti virtuali;
-* file temporanei.
+* file temporanei e materiale di sviluppo.
 
-Vengono invece mantenuti, quando utili alla documentazione e alla riproduzione dell'analisi:
+Vengono invece mantenuti quando utili alla documentazione e alla riproduzione:
 
 * codice sorgente;
 * configurazioni delle run;
 * metriche CSV/JSON;
-* risultati aggregati delle robust evaluation;
+* risultati aggregati;
 * grafici selezionati;
-* checkpoint leggeri selezionati, necessari per riprodurre alcune evaluation;
+* checkpoint finali leggeri necessari a riprodurre le evaluation;
 * README.
 
 I risultati numerici riportati nella documentazione derivano dagli artifact delle run effettivamente eseguite.
@@ -462,6 +368,6 @@ I risultati numerici riportati nella documentazione derivano dagli artifact dell
 
 Il progetto utilizza principalmente **PyTorch** e **Gymnasium**.
 
-I principali concetti di Deep Reinforcement Learning studiati nel laboratorio comprendono policy gradient, REINFORCE, discounted return, variance reduction, state-value function, advantage, Q-learning, Temporal-Difference learning, epsilon-greedy exploration, Experience Replay e Target Network.
+I concetti centrali del laboratorio comprendono Policy Gradient, REINFORCE, discounted return, variance reduction, state-value function, advantage, Q-learning, Temporal-Difference learning, epsilon-greedy exploration, Experience Replay e Target Network.
 
-ChatGPT è stato utilizzato come supporto per chiarimenti teorici, organizzazione del lavoro, revisione del codice, debugging, progettazione degli esperimenti, analisi degli artifact e documentazione. Le scelte implementative e i risultati riportati sono stati verificati sul codice e sugli output effettivi del progetto.
+ChatGPT è stato utilizzato come supporto per chiarimenti teorici, organizzazione del lavoro, revisione del codice, debugging, progettazione degli esperimenti, analisi degli artifact, costruzione dei grafici e documentazione. Le scelte implementative e i risultati riportati sono stati verificati sul codice e sugli output effettivi del progetto.

@@ -1,0 +1,7 @@
+environment,training_seed,run_name,checkpoint_role,validation_mean_reward,validation_std_reward,validation_median_reward
+CartPole-v1,42,cartpole_seed42,best,439.74,97.07539544086339,500.0
+CartPole-v1,123,cartpole_seed123,best,500.0,0.0,500.0
+CartPole-v1,456,cartpole_seed456,best,500.0,0.0,500.0
+LunarLander-v3,42,lunarlander_seed42,best,282.02722812827375,16.870142789931165,280.04895631118353
+LunarLander-v3,123,lunarlander_seed123,final,281.9569750878372,14.376445752675549,281.8833058210135
+LunarLander-v3,456,lunarlander_seed456,best,274.7467187194155,47.84154050682069,281.3210803887882

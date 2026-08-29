@@ -1,5 +1,6 @@
 import csv
 import json
+import shutil
 import statistics
 from pathlib import Path
 
@@ -9,503 +10,320 @@ import torch
 from Exercise3.dqn import QNetwork
 
 
-NUM_EVAL_EPISODES = 100
-BASE_SEED = 1000
-
 BASE_DIR = Path(__file__).parent
 RUNS_DIR = BASE_DIR / "runs"
 RESULTS_DIR = BASE_DIR / "results"
 
+TRAINING_SEEDS = [42, 123, 456]
+VALIDATION_SEEDS = list(range(2000, 2050))
+TEST_SEEDS = list(range(1000, 1100))
 
-CHECKPOINTS = [
-    {
-        "id": "cartpole_mse_lr0.001_final",
-        "run_dir": "cartpole_dqn_pilot_seed42",
-        "checkpoint": "q_network.pt",
-        "checkpoint_role": "final",
-        "selected": False,
-    },
-    {
-        "id": "cartpole_mse_lr0.0005_best",
-        "run_dir": "cartpole_dqn_lr0.0005_seed42",
-        "checkpoint": "best_q_network.pt",
-        "checkpoint_role": "best_training_evaluation",
-        "selected": True,
-    },
-    {
-        "id": "cartpole_mse_lr0.0005_final",
-        "run_dir": "cartpole_dqn_lr0.0005_seed42",
-        "checkpoint": "final_q_network.pt",
-        "checkpoint_role": "final",
-        "selected": False,
-    },
-    {
-        "id": "cartpole_huber_lr0.0005_best",
-        "run_dir": "cartpole_dqn_huber_lr0.0005_seed42",
-        "checkpoint": "best_q_network.pt",
-        "checkpoint_role": "best_training_evaluation",
-        "selected": False,
-    },
-    {
-        "id": "cartpole_huber_lr0.0005_final",
-        "run_dir": "cartpole_dqn_huber_lr0.0005_seed42",
-        "checkpoint": "final_q_network.pt",
-        "checkpoint_role": "final",
-        "selected": False,
-    },
-    {
-        "id": "lunarlander_500_final",
-        "run_dir": "lunarlander_dqn_pilot_seed42",
-        "checkpoint": "final_q_network.pt",
-        "checkpoint_role": "final",
-        "selected": False,
-    },
-    {
-        "id": "lunarlander_1000_best",
-        "run_dir": "lunarlander_dqn_final_1000ep_seed42",
-        "checkpoint": "best_q_network.pt",
-        "checkpoint_role": "best_training_evaluation",
-        "selected": False,
-    },
-    {
-        "id": "lunarlander_1000_final",
-        "run_dir": "lunarlander_dqn_final_1000ep_seed42",
-        "checkpoint": "final_q_network.pt",
-        "checkpoint_role": "final",
-        "selected": True,
-    },
+RUNS = [
+    ("CartPole-v1", seed, f"cartpole_seed{seed}")
+    for seed in TRAINING_SEEDS
+] + [
+    ("LunarLander-v3", seed, f"lunarlander_seed{seed}")
+    for seed in TRAINING_SEEDS
 ]
 
 
-def load_config(run_dir):
-    config_path = run_dir / "config.json"
+def save_csv(path, rows):
+    if not rows:
+        return
 
-    if not config_path.exists():
-        raise FileNotFoundError(
-            f"Missing config file: {config_path}"
+    with open(path, "w", newline="") as file:
+        writer = csv.DictWriter(
+            file,
+            fieldnames=list(rows[0]),
+            lineterminator="\n",
         )
+        writer.writeheader()
+        writer.writerows(rows)
 
-    with open(config_path) as file:
-        return json.load(file)
+
+def summarize(rows):
+    rewards = [row["reward"] for row in rows]
+
+    return {
+        "mean_reward": statistics.mean(rewards),
+        "std_reward": statistics.pstdev(rewards),
+        "median_reward": statistics.median(rewards),
+        "min_reward": min(rewards),
+        "max_reward": max(rewards),
+    }
 
 
-def evaluate_checkpoint(
-    checkpoint_path,
-    environment_name,
-    hidden_dim,
-):
-    env = gym.make(environment_name)
+def evaluate_checkpoint(run_dir, checkpoint_path, seeds):
+    with open(run_dir / "config.json") as file:
+        config = json.load(file)
 
+    env = gym.make(config["environment"])
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.n
 
     network = QNetwork(
-        state_dim=state_dim,
-        action_dim=action_dim,
-        hidden_dim=hidden_dim,
+        state_dim,
+        action_dim,
+        config["hidden_dims"],
     )
-
-    state_dict = torch.load(
-        checkpoint_path,
-        map_location="cpu",
-        weights_only=True,
-    )
-
     network.load_state_dict(
-        state_dict
+        torch.load(
+            checkpoint_path,
+            map_location="cpu",
+            weights_only=True,
+        )
     )
-
     network.eval()
 
-    episode_results = []
+    rows = []
 
     with torch.inference_mode():
-        for episode_index in range(
-            NUM_EVAL_EPISODES
-        ):
-            seed = (
-                BASE_SEED
-                + episode_index
-            )
-
-            state, info = env.reset(
-                seed=seed
-            )
-
+        for index, seed in enumerate(seeds, start=1):
+            state, _ = env.reset(seed=seed)
             terminated = False
             truncated = False
-
             total_reward = 0.0
-            episode_length = 0
+            length = 0
 
-            while not (
-                terminated or truncated
-            ):
+            while not (terminated or truncated):
                 state_tensor = torch.as_tensor(
                     state,
                     dtype=torch.float32,
                 )
-
-                q_values = network(
-                    state_tensor
-                )
-
-                action = int(
-                    torch.argmax(
-                        q_values
-                    ).item()
-                )
+                action = int(network(state_tensor).argmax().item())
 
                 (
                     state,
                     reward,
                     terminated,
                     truncated,
-                    info,
+                    _,
                 ) = env.step(action)
 
                 total_reward += reward
-                episode_length += 1
+                length += 1
 
-            episode_results.append(
+            rows.append(
                 {
-                    "episode":
-                        episode_index + 1,
-                    "seed":
-                        seed,
-                    "reward":
-                        total_reward,
-                    "length":
-                        episode_length,
+                    "episode": index,
+                    "seed": seed,
+                    "reward": total_reward,
+                    "length": length,
                 }
             )
 
     env.close()
-
-    return episode_results
-
-
-def compute_summary(episode_results):
-    rewards = [
-        row["reward"]
-        for row in episode_results
-    ]
-
-    lengths = [
-        row["length"]
-        for row in episode_results
-    ]
-
-    positive_count = sum(
-        reward > 0
-        for reward in rewards
-    )
-
-    reward_ge_100_count = sum(
-        reward >= 100
-        for reward in rewards
-    )
-
-    reward_ge_200_count = sum(
-        reward >= 200
-        for reward in rewards
-    )
-
-    return {
-        "mean_reward":
-            statistics.mean(rewards),
-
-        "std_reward":
-            statistics.pstdev(rewards),
-
-        "median_reward":
-            statistics.median(rewards),
-
-        "min_reward":
-            min(rewards),
-
-        "max_reward":
-            max(rewards),
-
-        "mean_episode_length":
-            statistics.mean(lengths),
-
-        "positive_count":
-            positive_count,
-
-        "positive_percentage":
-            100.0
-            * positive_count
-            / len(rewards),
-
-        "reward_ge_100_count":
-            reward_ge_100_count,
-
-        "reward_ge_100_percentage":
-            100.0
-            * reward_ge_100_count
-            / len(rewards),
-
-        "reward_ge_200_count":
-            reward_ge_200_count,
-
-        "reward_ge_200_percentage":
-            100.0
-            * reward_ge_200_count
-            / len(rewards),
-    }
+    return config, rows
 
 
-def save_episode_results(rows):
-    path = (
-        RESULTS_DIR
-        / "robust_evaluation_episodes.csv"
-    )
+def choose_checkpoint(run_dir):
+    candidates = []
 
-    fieldnames = [
-        "checkpoint_id",
-        "environment",
-        "selected",
-        "episode",
-        "seed",
-        "reward",
-        "length",
-    ]
+    for role in ("best", "final"):
+        path = run_dir / f"{role}_q_network.pt"
 
-    with open(
-        path,
-        "w",
-        newline="",
-    ) as file:
-        writer = csv.DictWriter(
-            file,
-            fieldnames=fieldnames,
-            lineterminator="\n",
+        if not path.exists():
+            continue
+
+        config, rows = evaluate_checkpoint(
+            run_dir,
+            path,
+            VALIDATION_SEEDS,
+        )
+        summary = summarize(rows)
+
+        candidates.append(
+            {
+                "role": role,
+                "path": path,
+                "config": config,
+                "summary": summary,
+            }
         )
 
-        writer.writeheader()
-        writer.writerows(rows)
-
-    return path
-
-
-def save_summary(rows):
-    path = (
-        RESULTS_DIR
-        / "robust_evaluation_summary.csv"
-    )
-
-    fieldnames = [
-        "checkpoint_id",
-        "environment",
-        "checkpoint_role",
-        "selected",
-        "training_episodes",
-        "learning_rate",
-        "loss",
-        "mean_reward",
-        "std_reward",
-        "median_reward",
-        "min_reward",
-        "max_reward",
-        "mean_episode_length",
-        "positive_count",
-        "positive_percentage",
-        "reward_ge_100_count",
-        "reward_ge_100_percentage",
-        "reward_ge_200_count",
-        "reward_ge_200_percentage",
-    ]
-
-    with open(
-        path,
-        "w",
-        newline="",
-    ) as file:
-        writer = csv.DictWriter(
-            file,
-            fieldnames=fieldnames,
-            lineterminator="\n",
+    if candidates:
+        selected = max(
+            candidates,
+            key=lambda item: (
+                item["summary"]["mean_reward"],
+                item["summary"]["median_reward"],
+                -item["summary"]["std_reward"],
+            ),
         )
 
-        writer.writeheader()
-        writer.writerows(rows)
+        shutil.copy2(
+            selected["path"],
+            run_dir / "selected_q_network.pt",
+        )
 
-    return path
+        return (
+            selected["config"],
+            selected["role"],
+            selected["summary"],
+        )
+
+    selected_path = run_dir / "selected_q_network.pt"
+
+    if not selected_path.exists():
+        raise FileNotFoundError(
+            f"No checkpoint found in {run_dir}"
+        )
+
+    config, rows = evaluate_checkpoint(
+        run_dir,
+        selected_path,
+        VALIDATION_SEEDS,
+    )
+    summary = summarize(rows)
+
+    return (
+        config,
+        config.get("selected_checkpoint_role", "selected"),
+        summary,
+    )
+
+
+def success_percentage(environment, rewards):
+    threshold = 475.0 if environment == "CartPole-v1" else 200.0
+    return (
+        threshold,
+        100.0
+        * sum(reward >= threshold for reward in rewards)
+        / len(rewards),
+    )
 
 
 def main():
-    RESULTS_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    print(
-        "Robust evaluation"
-    )
-
-    print(
-        "Episodes per checkpoint:",
-        NUM_EVAL_EPISODES,
-    )
-
-    print(
-        "Seeds:",
-        f"{BASE_SEED}-"
-        f"{BASE_SEED + NUM_EVAL_EPISODES - 1}",
-    )
-
-    all_episode_rows = []
+    selection_rows = []
+    episode_rows = []
     summary_rows = []
 
-    for specification in CHECKPOINTS:
-        run_dir = (
-            RUNS_DIR
-            / specification["run_dir"]
+    for environment, training_seed, run_name in RUNS:
+        run_dir = RUNS_DIR / run_name
+
+        if not run_dir.exists():
+            raise FileNotFoundError(f"Missing run: {run_dir}")
+
+        config, role, validation = choose_checkpoint(run_dir)
+
+        selection_rows.append(
+            {
+                "environment": environment,
+                "training_seed": training_seed,
+                "run_name": run_name,
+                "checkpoint_role": role,
+                "validation_mean_reward": validation["mean_reward"],
+                "validation_std_reward": validation["std_reward"],
+                "validation_median_reward": validation["median_reward"],
+            }
         )
 
-        checkpoint_path = (
-            run_dir
-            / specification["checkpoint"]
+        _, test_rows = evaluate_checkpoint(
+            run_dir,
+            run_dir / "selected_q_network.pt",
+            TEST_SEEDS,
+        )
+        test_summary = summarize(test_rows)
+        rewards = [row["reward"] for row in test_rows]
+        threshold, success = success_percentage(
+            environment,
+            rewards,
         )
 
-        if not checkpoint_path.exists():
-            raise FileNotFoundError(
-                f"Missing checkpoint: "
-                f"{checkpoint_path}"
-            )
-
-        config = load_config(
-            run_dir
+        perfect_500 = (
+            100.0
+            * sum(reward == 500 for reward in rewards)
+            / len(rewards)
+            if environment == "CartPole-v1"
+            else ""
         )
 
-        environment_name = (
-            config["environment"]
-        )
-
-        hidden_dim = (
-            config["hidden_dim"]
-        )
-
-        print(
-            "\nEvaluating:",
-            specification["id"],
-        )
-
-        episode_results = (
-            evaluate_checkpoint(
-                checkpoint_path=
-                    checkpoint_path,
-                environment_name=
-                    environment_name,
-                hidden_dim=
-                    hidden_dim,
-            )
-        )
-
-        summary = compute_summary(
-            episode_results
-        )
-
-        for row in episode_results:
-            all_episode_rows.append(
+        for row in test_rows:
+            episode_rows.append(
                 {
-                    "checkpoint_id":
-                        specification["id"],
-                    "environment":
-                        environment_name,
-                    "selected":
-                        specification["selected"],
+                    "environment": environment,
+                    "training_seed": training_seed,
                     **row,
                 }
             )
 
         summary_rows.append(
             {
-                "checkpoint_id":
-                    specification["id"],
-
-                "environment":
-                    environment_name,
-
-                "checkpoint_role":
-                    specification[
-                        "checkpoint_role"
-                    ],
-
-                "selected":
-                    specification["selected"],
-
-                "training_episodes":
-                    config["num_episodes"],
-
-                "learning_rate":
-                    config["learning_rate"],
-
-                "loss":
-                    config["loss"],
-
-                **summary,
+                "environment": environment,
+                "training_seed": training_seed,
+                "checkpoint_role": role,
+                **test_summary,
+                "success_threshold": threshold,
+                "success_percentage": success,
+                "perfect_500_percentage": perfect_500,
             }
         )
 
         print(
-            f"Mean reward: "
-            f"{summary['mean_reward']:.2f}"
+            f"{environment} seed {training_seed}: "
+            f"{test_summary['mean_reward']:.2f} "
+            f"± {test_summary['std_reward']:.2f}"
         )
 
-        print(
-            f"Std reward: "
-            f"{summary['std_reward']:.2f}"
+    aggregate_rows = []
+
+    for environment in ("CartPole-v1", "LunarLander-v3"):
+        rows = [
+            row
+            for row in summary_rows
+            if row["environment"] == environment
+        ]
+        seed_means = [row["mean_reward"] for row in rows]
+        successes = [row["success_percentage"] for row in rows]
+
+        aggregate_rows.append(
+            {
+                "environment": environment,
+                "training_seed_count": len(rows),
+                "test_episodes_per_seed": len(TEST_SEEDS),
+                "mean_of_seed_means": statistics.mean(seed_means),
+                "std_of_seed_means": statistics.pstdev(seed_means),
+                "min_seed_mean": min(seed_means),
+                "max_seed_mean": max(seed_means),
+                "success_threshold": rows[0]["success_threshold"],
+                "mean_success_percentage": statistics.mean(successes),
+                "mean_perfect_500_percentage": (
+                    statistics.mean(
+                        row["perfect_500_percentage"]
+                        for row in rows
+                    )
+                    if environment == "CartPole-v1"
+                    else ""
+                ),
+            }
         )
 
-        print(
-            f"Median reward: "
-            f"{summary['median_reward']:.2f}"
-        )
-
-        print(
-            f"Min / max: "
-            f"{summary['min_reward']:.2f} / "
-            f"{summary['max_reward']:.2f}"
-        )
-
-        print(
-            f"Positive episodes: "
-            f"{summary['positive_percentage']:.1f}%"
-        )
-
-        print(
-            f"Reward >= 100: "
-            f"{summary['reward_ge_100_percentage']:.1f}%"
-        )
-
-        print(
-            f"Reward >= 200: "
-            f"{summary['reward_ge_200_percentage']:.1f}%"
-        )
-
-    episode_path = save_episode_results(
-        all_episode_rows
+    save_csv(
+        RESULTS_DIR / "validation_selection.csv",
+        selection_rows,
+    )
+    save_csv(
+        RESULTS_DIR / "final_test_episodes.csv",
+        episode_rows,
+    )
+    save_csv(
+        RESULTS_DIR / "final_test_summary.csv",
+        summary_rows,
+    )
+    save_csv(
+        RESULTS_DIR / "final_test_aggregate.csv",
+        aggregate_rows,
     )
 
-    summary_path = save_summary(
-        summary_rows
-    )
-
-    print(
-        "\nEvaluation completed."
-    )
-
-    print(
-        "Episode-level results:",
-        episode_path,
-    )
-
-    print(
-        "Summary:",
-        summary_path,
-    )
+    print("\nFinal aggregate")
+    for row in aggregate_rows:
+        print(
+            f"{row['environment']}: "
+            f"{row['mean_of_seed_means']:.2f} "
+            f"± {row['std_of_seed_means']:.2f}"
+        )
 
 
 if __name__ == "__main__":

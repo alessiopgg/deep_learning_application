@@ -7,26 +7,30 @@ import torch.nn.functional as F
 
 
 class QNetwork(nn.Module):
-    def __init__(
-        self,
-        state_dim: int,
-        action_dim: int,
-        hidden_dim: int = 64,
-    ):
+    def __init__(self, state_dim, action_dim, hidden_dims=(128, 128)):
         super().__init__()
 
-        self.network = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, action_dim),
-        )
+        layers = []
+        input_dim = state_dim
 
-    def forward(self, state: torch.Tensor) -> torch.Tensor:
+        for hidden_dim in hidden_dims:
+            layers.extend(
+                [
+                    nn.Linear(input_dim, hidden_dim),
+                    nn.ReLU(),
+                ]
+            )
+            input_dim = hidden_dim
+
+        layers.append(nn.Linear(input_dim, action_dim))
+        self.network = nn.Sequential(*layers)
+
+    def forward(self, state):
         return self.network(state)
 
 
 class ReplayBuffer:
-    def __init__(self, capacity: int):
+    def __init__(self, capacity):
         self.buffer = deque(maxlen=capacity)
 
     def __len__(self):
@@ -41,38 +45,19 @@ class ReplayBuffer:
         terminated,
         truncated,
     ):
-        state = torch.as_tensor(
-            state,
-            dtype=torch.float32,
-        ).detach().clone()
-
-        next_state = torch.as_tensor(
-            next_state,
-            dtype=torch.float32,
-        ).detach().clone()
-
         self.buffer.append(
             (
-                state,
+                torch.as_tensor(state, dtype=torch.float32).clone(),
                 int(action),
                 float(reward),
-                next_state,
+                torch.as_tensor(next_state, dtype=torch.float32).clone(),
                 bool(terminated),
                 bool(truncated),
             )
         )
 
-    def sample(self, batch_size: int):
-        if batch_size > len(self.buffer):
-            raise ValueError(
-                "batch_size cannot be larger than replay buffer size"
-            )
-
-        transitions = random.sample(
-            self.buffer,
-            batch_size,
-        )
-
+    def sample(self, batch_size):
+        transitions = random.sample(self.buffer, batch_size)
         (
             states,
             actions,
@@ -84,23 +69,11 @@ class ReplayBuffer:
 
         return (
             torch.stack(states),
-            torch.tensor(
-                actions,
-                dtype=torch.int64,
-            ),
-            torch.tensor(
-                rewards,
-                dtype=torch.float32,
-            ),
+            torch.tensor(actions, dtype=torch.int64),
+            torch.tensor(rewards, dtype=torch.float32),
             torch.stack(next_states),
-            torch.tensor(
-                terminated,
-                dtype=torch.bool,
-            ),
-            torch.tensor(
-                truncated,
-                dtype=torch.bool,
-            ),
+            torch.tensor(terminated, dtype=torch.bool),
+            torch.tensor(truncated, dtype=torch.bool),
         )
 
 
@@ -113,86 +86,58 @@ def compute_dqn_loss(
     next_states,
     terminated,
     gamma,
-    loss_type="mse",
+    loss_type,
 ):
     q_values = online_network(states)
-
     selected_q_values = q_values.gather(
-        dim=1,
-        index=actions.unsqueeze(1),
+        1,
+        actions.unsqueeze(1),
     ).squeeze(1)
 
     with torch.no_grad():
-        next_q_values = target_network(
-            next_states
-        )
-
-        max_next_q_values = next_q_values.max(
-            dim=1
-        ).values
-
+        next_q_values = target_network(next_states).max(dim=1).values
         targets = (
             rewards
             + gamma
             * (~terminated).float()
-            * max_next_q_values
+            * next_q_values
         )
 
     if loss_type == "mse":
-        loss = F.mse_loss(
-            selected_q_values,
-            targets,
-        )
+        return F.mse_loss(selected_q_values, targets)
 
-    elif loss_type == "huber":
-        loss = F.smooth_l1_loss(
-            selected_q_values,
-            targets,
-        )
+    if loss_type == "huber":
+        return F.smooth_l1_loss(selected_q_values, targets)
 
-    else:
-        raise ValueError(
-            f"Unsupported loss_type: {loss_type}"
-        )
-
-    return (
-        loss,
-        selected_q_values,
-        targets,
-    )
+    raise ValueError(f"Unsupported loss type: {loss_type}")
 
 
-def select_action(
-    network,
-    state,
-    action_dim,
-    epsilon,
-):
+def select_action(network, state, action_dim, epsilon):
     if random.random() < epsilon:
         return random.randrange(action_dim)
 
-    state_tensor = torch.as_tensor(
-        state,
-        dtype=torch.float32,
-    )
+    state = torch.as_tensor(state, dtype=torch.float32)
 
     with torch.no_grad():
-        q_values = network(
-            state_tensor
-        )
-
-    return int(
-        torch.argmax(q_values).item()
-    )
+        return int(network(state).argmax().item())
 
 
-def sync_target_network(
+def sync_target_network(online_network, target_network):
+    target_network.load_state_dict(online_network.state_dict())
+
+
+def soft_update_target_network(
     online_network,
     target_network,
+    tau,
 ):
-    target_network.load_state_dict(
-        online_network.state_dict()
-    )
+    with torch.no_grad():
+        for target_parameter, online_parameter in zip(
+            target_network.parameters(),
+            online_network.parameters(),
+        ):
+            target_parameter.mul_(1.0 - tau)
+            target_parameter.add_(online_parameter, alpha=tau)
 
 
 def linear_epsilon(
@@ -201,97 +146,54 @@ def linear_epsilon(
     epsilon_end,
     decay_steps,
 ):
-    if decay_steps <= 0:
-        raise ValueError(
-            "decay_steps must be positive"
-        )
-
-    fraction = min(
-        step / decay_steps,
-        1.0,
-    )
-
+    fraction = min(step / decay_steps, 1.0)
     return (
         epsilon_start
-        + fraction
-        * (epsilon_end - epsilon_start)
+        + fraction * (epsilon_end - epsilon_start)
     )
 
 
-def evaluate_dqn(
-    env,
-    network,
-    num_episodes,
-):
-    total_rewards = []
-    episode_lengths = []
+def evaluate_dqn(env, network, seeds):
+    rewards = []
+    lengths = []
 
     was_training = network.training
     network.eval()
 
     with torch.inference_mode():
-        for _ in range(num_episodes):
-            state, info = env.reset()
-
+        for seed in seeds:
+            state, _ = env.reset(seed=seed)
             terminated = False
             truncated = False
-
             total_reward = 0.0
-            episode_length = 0
+            length = 0
 
-            while not (
-                terminated or truncated
-            ):
+            while not (terminated or truncated):
                 state_tensor = torch.as_tensor(
                     state,
                     dtype=torch.float32,
                 )
-
-                q_values = network(
-                    state_tensor
-                )
-
-                action = int(
-                    torch.argmax(
-                        q_values
-                    ).item()
-                )
-
+                action = int(network(state_tensor).argmax().item())
                 (
                     state,
                     reward,
                     terminated,
                     truncated,
-                    info,
+                    _,
                 ) = env.step(action)
 
                 total_reward += reward
-                episode_length += 1
+                length += 1
 
-            total_rewards.append(
-                total_reward
-            )
-
-            episode_lengths.append(
-                episode_length
-            )
+            rewards.append(total_reward)
+            lengths.append(length)
 
     if was_training:
         network.train()
 
-    average_reward = (
-        sum(total_rewards)
-        / num_episodes
-    )
-
-    average_length = (
-        sum(episode_lengths)
-        / num_episodes
-    )
-
     return (
-        average_reward,
-        average_length,
+        sum(rewards) / len(rewards),
+        sum(lengths) / len(lengths),
     )
 
 
@@ -309,55 +211,55 @@ def train_dqn(
     epsilon_start,
     epsilon_end,
     epsilon_decay_steps,
+    train_frequency,
+    target_update_mode,
     target_sync_every,
+    target_tau,
     eval_every,
-    eval_episodes,
-    checkpoint_path=None,
-    loss_type="mse",
+    eval_seeds,
+    checkpoint_path,
+    loss_type,
+    gradient_clip_norm,
+    training_seed,
+    early_stopping_reward=None,
+    early_stopping_patience=0,
 ):
     training_history = []
     evaluation_history = []
 
     total_steps = 0
     updates = 0
+    best_evaluation_reward = float("-inf")
+    successful_evaluations = 0
 
-    best_evaluation_reward = float(
-        "-inf"
-    )
+    sync_target_network(online_network, target_network)
 
-    sync_target_network(
-        online_network=online_network,
-        target_network=target_network,
-    )
-
-    for episode in range(
-        1,
-        num_episodes + 1,
-    ):
-        state, info = env.reset()
+    for episode in range(1, num_episodes + 1):
+        if episode == 1:
+            state, _ = env.reset(seed=training_seed)
+        else:
+            state, _ = env.reset()
 
         terminated = False
         truncated = False
-
         episode_reward = 0.0
         episode_length = 0
-        episode_losses = []
+        losses = []
+        epsilon = epsilon_start
 
-        while not (
-            terminated or truncated
-        ):
+        while not (terminated or truncated):
             epsilon = linear_epsilon(
-                step=total_steps,
-                epsilon_start=epsilon_start,
-                epsilon_end=epsilon_end,
-                decay_steps=epsilon_decay_steps,
+                total_steps,
+                epsilon_start,
+                epsilon_end,
+                epsilon_decay_steps,
             )
 
             action = select_action(
-                network=online_network,
-                state=state,
-                action_dim=env.action_space.n,
-                epsilon=epsilon,
+                online_network,
+                state,
+                env.action_space.n,
+                epsilon,
             )
 
             (
@@ -365,29 +267,27 @@ def train_dqn(
                 reward,
                 terminated,
                 truncated,
-                info,
+                _,
             ) = env.step(action)
 
             replay_buffer.push(
-                state=state,
-                action=action,
-                reward=reward,
-                next_state=next_state,
-                terminated=terminated,
-                truncated=truncated,
+                state,
+                action,
+                reward,
+                next_state,
+                terminated,
+                truncated,
             )
 
             state = next_state
-
             episode_reward += reward
             episode_length += 1
             total_steps += 1
 
             if (
-                len(replay_buffer)
-                >= min_buffer_size
-                and len(replay_buffer)
-                >= batch_size
+                len(replay_buffer) >= min_buffer_size
+                and len(replay_buffer) >= batch_size
+                and total_steps % train_frequency == 0
             ):
                 (
                     states,
@@ -395,53 +295,45 @@ def train_dqn(
                     rewards,
                     next_states,
                     terminated_batch,
-                    truncated_batch,
-                ) = replay_buffer.sample(
-                    batch_size=batch_size,
-                )
+                    _,
+                ) = replay_buffer.sample(batch_size)
 
-                (
-                    loss,
-                    selected_q_values,
-                    targets,
-                ) = compute_dqn_loss(
-                    online_network=online_network,
-                    target_network=target_network,
-                    states=states,
-                    actions=actions,
-                    rewards=rewards,
-                    next_states=next_states,
-                    terminated=terminated_batch,
-                    gamma=gamma,
-                    loss_type=loss_type,
+                loss = compute_dqn_loss(
+                    online_network,
+                    target_network,
+                    states,
+                    actions,
+                    rewards,
+                    next_states,
+                    terminated_batch,
+                    gamma,
+                    loss_type,
                 )
 
                 optimizer.zero_grad()
                 loss.backward()
-                optimizer.step()
 
-                updates += 1
-
-                episode_losses.append(
-                    loss.item()
-                )
-
-                if (
-                    updates
-                    % target_sync_every
-                    == 0
-                ):
-                    sync_target_network(
-                        online_network=online_network,
-                        target_network=target_network,
+                if gradient_clip_norm is not None:
+                    torch.nn.utils.clip_grad_norm_(
+                        online_network.parameters(),
+                        gradient_clip_norm,
                     )
 
-        mean_loss = (
-            sum(episode_losses)
-            / len(episode_losses)
-            if episode_losses
-            else None
-        )
+                optimizer.step()
+                updates += 1
+                losses.append(loss.item())
+
+                if target_update_mode == "soft":
+                    soft_update_target_network(
+                        online_network,
+                        target_network,
+                        target_tau,
+                    )
+                elif updates % target_sync_every == 0:
+                    sync_target_network(
+                        online_network,
+                        target_network,
+                    )
 
         training_history.append(
             {
@@ -449,53 +341,59 @@ def train_dqn(
                 "total_steps": total_steps,
                 "reward": episode_reward,
                 "length": episode_length,
-                "mean_loss": mean_loss,
+                "mean_loss": (
+                    sum(losses) / len(losses)
+                    if losses
+                    else None
+                ),
                 "epsilon": epsilon,
             }
         )
 
-        if episode % eval_every == 0:
-            (
-                average_reward,
-                average_length,
-            ) = evaluate_dqn(
-                env=eval_env,
-                network=online_network,
-                num_episodes=eval_episodes,
+        if episode % eval_every != 0:
+            continue
+
+        average_reward, average_length = evaluate_dqn(
+            eval_env,
+            online_network,
+            eval_seeds,
+        )
+
+        evaluation_history.append(
+            {
+                "episode": episode,
+                "total_steps": total_steps,
+                "average_reward": average_reward,
+                "average_length": average_length,
+            }
+        )
+
+        if average_reward > best_evaluation_reward:
+            best_evaluation_reward = average_reward
+            torch.save(
+                online_network.state_dict(),
+                checkpoint_path,
             )
 
-            evaluation_history.append(
-                {
-                    "episode": episode,
-                    "total_steps": total_steps,
-                    "average_reward": average_reward,
-                    "average_length": average_length,
-                }
-            )
+        print(
+            f"Episode {episode}/{num_episodes} "
+            f"- steps: {total_steps} "
+            f"- epsilon: {epsilon:.3f} "
+            f"- evaluation reward: {average_reward:.2f}"
+        )
 
-            if (
-                average_reward
-                > best_evaluation_reward
-            ):
-                best_evaluation_reward = (
-                    average_reward
-                )
+        if (
+            early_stopping_reward is not None
+            and early_stopping_patience > 0
+        ):
+            if average_reward >= early_stopping_reward:
+                successful_evaluations += 1
+            else:
+                successful_evaluations = 0
 
-                if checkpoint_path is not None:
-                    torch.save(
-                        online_network.state_dict(),
-                        checkpoint_path,
-                    )
-
-            print(
-                f"Episode {episode}/{num_episodes} "
-                f"- steps: {total_steps} "
-                f"- epsilon: {epsilon:.3f} "
-                f"- eval reward: "
-                f"{average_reward:.2f} "
-                f"- eval length: "
-                f"{average_length:.2f}"
-            )
+            if successful_evaluations >= early_stopping_patience:
+                print("Early stopping criterion reached.")
+                break
 
     return (
         training_history,
