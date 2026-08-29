@@ -192,7 +192,36 @@ Per il miglior equilibrio tra qualità, semplicità e costo, **ResNet-18 full + 
 
 Il grafico qualità-costo evidenzia che le configurazioni `full` di ResNet-18 raggiungono la regione di performance più elevata con un costo nettamente inferiore alle corrispondenti ResNet-50.
 
+
 ---
+
+### Analisi della validation
+
+Il checkpoint di ciascuna configurazione viene selezionato esclusivamente sulla **minima validation loss**. L'analisi delle dodici validation permette quindi di verificare se le tendenze osservate sul test siano già supportate da dati non utilizzati per l'aggiornamento dei pesi.
+
+| Backbone | Strategia | Testa | Best epoch | Best val loss | Val accuracy |
+|---|---|---|---:|---:|---:|
+| ResNet-18 | `classifier` | linear | 5 | 0.25382 | 0.9322 |
+| ResNet-18 | `classifier` | MLP | 5 | 0.20446 | 0.9279 |
+| ResNet-18 | `last_block` | linear | 5 | 0.01677 | 0.9949 |
+| ResNet-18 | `last_block` | MLP | 5 | 0.03076 | 0.9919 |
+| ResNet-18 | `full` | linear | **2** | 0.00355 | **0.9994** |
+| ResNet-18 | `full` | MLP | 5 | **0.00327** | 0.9992 |
+| ResNet-50 | `classifier` | linear | 5 | 0.13837 | 0.9645 |
+| ResNet-50 | `classifier` | MLP | 5 | 0.10337 | 0.9677 |
+| ResNet-50 | `last_block` | linear | 5 | 0.01043 | 0.9964 |
+| ResNet-50 | `last_block` | MLP | **3** | 0.01786 | 0.9947 |
+| ResNet-50 | `full` | linear | 5 | 0.00504 | 0.9981 |
+| ResNet-50 | `full` | MLP | 5 | 0.00496 | 0.9983 |
+
+La validation conferma chiaramente la tendenza principale osservata sul test: limitarsi ad addestrare il solo `classifier` è nettamente meno efficace, l'adattamento di `layer4` produce un forte miglioramento e il **full fine-tuning** raggiunge i risultati migliori. La conclusione principale dell'esperimento è quindi già supportata dalla validation e non dipende esclusivamente dal confronto delle dodici configurazioni sul test ufficiale.
+
+Tra le configurazioni migliori, **ResNet-18 full + MLP** raggiunge la minima validation loss (`0.00327`), mentre **ResNet-18 full + linear** ottiene la massima validation accuracy (`0.9994`). Anche sul test le due configurazioni rimangono molto vicine: la testa lineare raggiunge la massima accuracy (`0.9851`), mentre la MLP ottiene la migliore macro-F1 (`0.9805`). Considerando la ridotta entità delle differenze e la disponibilità di una sola run per configurazione, non è possibile sostenere una superiorità netta di una testa rispetto all'altra. La configurazione lineare viene mantenuta come modello di riferimento per il buon equilibrio tra accuratezza, semplicità e costo computazionale.
+
+Le validation mostrano inoltre l'utilità effettiva del checkpointing. **ResNet-18 full + linear**, ad esempio, raggiunge la minima validation loss già all'epoca 2 (`0.00355`), mentre le epoche successive non migliorano tale valore. Analogamente, **ResNet-50 last_block + MLP** raggiunge il minimo all'epoca 3 (`0.01786`) e peggiora successivamente. Se fosse stato utilizzato automaticamente il modello dell'ultima epoca, in questi casi non sarebbe stato selezionato il checkpoint migliore secondo il criterio stabilito.
+
+Infine, le configurazioni con backbone congelato presentano un gap validation-test sensibilmente maggiore rispetto al full fine-tuning. Ad esempio, ResNet-50 `classifier` + MLP passa da `0.9677` di validation accuracy a `0.7849` sul test, mentre ResNet-18 `full` + linear passa da `0.9994` a `0.9851`. Questo suggerisce che il test ufficiale rappresenti una valutazione più difficile rispetto allo split di validation ricavato dal training e che l'adattamento del backbone migliori la capacità di generalizzare tra i due split.
+
 
 ## Riproduzione
 
